@@ -258,17 +258,18 @@ network.on("click", function (params) {
 function keyPartsFor(node) {
   if (node.type === "Person") {
     return [
-      `first_name: ${cypherStr(node.key.first_name)}`,
-      `last_name: ${cypherStr(node.key.last_name)}`,
-      `birth_date: ${cypherStr(node.key.birth_date)}`,
+      `first_name_key: ${cypherStr(node.key.first_name_key)}`,
+      `last_name_key: ${cypherStr(node.key.last_name_key)}`,
+      `birth_date_key: ${cypherStr(node.key.birth_date_key)}`,
     ];
   } else if (node.type === "Address") {
     return [
-      `street: ${cypherStr(node.key.street)}`,
-      `postal_code: ${cypherStr(node.key.postal_code)}`,
+      `street_key: ${cypherStr(node.key.street_key)}`,
+      `city_key: ${cypherStr(node.key.city_key)}`,
+      `postal_code_key: ${cypherStr(node.key.postal_code_key)}`,
     ];
   }
-  return [`siret: ${cypherStr(node.key.siret)}`];
+  return [`siret_key: ${cypherStr(node.key.siret_key)}`];
 }
 
 function clause(verb, alias, node) {

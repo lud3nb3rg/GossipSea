@@ -54,7 +54,7 @@ def _extract_directors(driver, person_registry: dict[PersonKey, Person], source_
         href = anchor.get_attribute("href")
         # Skip entries that are legal entities (link to /entreprise/...) rather than natural persons
         #TODO : Fix pitfall that skips directors with this href : "https://www.pappers.fr/recherche-dirigeants?q=bernard%20bounias"
-        if href is None or "/dirigeant/" not in href:
+        if href is None or "dirigeant" not in href:
             continue
         first_name, last_name, birth_date = _parse_director_href(href)
         role = item.find_element(By.XPATH, ".//span[@class='qualite']").text.strip()
