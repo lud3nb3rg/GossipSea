@@ -1,0 +1,59 @@
+import argparse
+import sys
+
+from pappers_scrapper import lookup, CaptchaError
+from graph import GossipGraph
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gossipsea",
+        description="OSINT pipeline for gathering information on individuals.",
+    )
+    parser.add_argument("--first-name", metavar="NAME", help="Target's first name")
+    parser.add_argument("--last-name", metavar="NAME", help="Target's last name")
+    parser.add_argument("--email", metavar="EMAIL", help="Target's email address (not yet implemented)")
+    parser.add_argument("--phone", metavar="PHONE", help="Target's phone number (not yet implemented)")
+    parser.add_argument("--username", metavar="USERNAME", help="Target's username (not yet implemented)")
+    parser.add_argument("--domain", metavar="DOMAIN", help="Target domain (not yet implemented)")
+    parser.add_argument("--ip", metavar="IP", help="Target IP address (not yet implemented)")
+    parser.add_argument("-o", "--output", metavar="FILE", default="output.cypher",
+                        help="Path for the exported Cypher file (default: output.cypher)")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    graph = GossipGraph()
+    ran_any = False
+
+    if args.first_name and args.last_name:
+        ran_any = True
+        print(f"Searching Pappers for {args.first_name} {args.last_name}...")
+        try:
+            results = lookup(args.first_name, args.last_name)
+        except CaptchaError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Found {len(results)} company/companies.")
+        graph.load_pappers(results)
+
+    for flag, name in [("--email", args.email), ("--phone", args.phone),
+                       ("--username", args.username), ("--domain", args.domain), ("--ip", args.ip)]:
+        if name:
+            print(f"Warning: {flag} is not yet implemented, skipping.", file=sys.stderr)
+
+    if not ran_any:
+        parser.print_help()
+        sys.exit(0)
+
+    graph.export_cypher(args.output)
+    print(f"Graph exported to {args.output}")
+
+    graph.display()
+
+
+if __name__ == "__main__":
+    main()
