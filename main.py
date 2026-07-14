@@ -19,6 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ip", metavar="IP", help="Target IP address (not yet implemented)")
     parser.add_argument("-o", "--output", metavar="FILE", default="output.cypher",
                         help="Path for the exported Cypher file (default: output.cypher)")
+    parser.add_argument("--html-output", metavar="FILE", default="output.html",
+                        help="Path for the interactive HTML graph (default: output.html)")
     return parser
 
 
@@ -52,7 +54,8 @@ def main() -> None:
     graph.export_cypher(args.output)
     print(f"Graph exported to {args.output}")
 
-    graph.display()
+    graph.export_html(args.html_output)
+    print(f"Interactive graph written to {args.html_output}")
 
 
 if __name__ == "__main__":

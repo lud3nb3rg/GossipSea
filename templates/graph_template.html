@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GossipSea — Interactive Graph</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #toolbar {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    background: #1f2430; color: #eee; border-bottom: 1px solid #333;
+  }
+  #toolbar h1 { font-size: 15px; margin: 0 16px 0 0; font-weight: 600; }
+  #toolbar button {
+    padding: 6px 12px; border: 1px solid #555; border-radius: 4px;
+    background: #2b3242; color: #eee; cursor: pointer; font-size: 13px;
+  }
+  #toolbar button:hover { background: #3a4256; }
+  #toolbar button.active { background: #4a6cf7; border-color: #4a6cf7; }
+  #status-bar { margin-left: 12px; font-size: 12px; color: #aaa; flex: 1; }
+  .legend { display: flex; gap: 12px; margin-left: 12px; font-size: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #network { flex: 1; }
+  #side-panel {
+    width: 320px; border-left: 1px solid #ddd; padding: 16px; overflow-y: auto;
+    box-sizing: border-box; background: #fafafa;
+  }
+  #side-panel.hidden { display: none; }
+  #side-panel h2 { margin: 0 0 2px 0; font-size: 17px; word-break: break-word; }
+  #side-panel .node-type { color: #888; font-size: 12px; text-transform: uppercase; margin-bottom: 12px; }
+  .prop-row { display: flex; flex-direction: column; padding: 6px 0; border-bottom: 1px solid #eee; }
+  .prop-key { font-size: 11px; color: #888; text-transform: uppercase; }
+  .prop-value { font-size: 14px; word-break: break-word; }
+  .source-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid #ddd; }
+  .source-section h3 { font-size: 12px; text-transform: uppercase; color: #888; margin: 0 0 6px 0; }
+  .source-section a { display: block; font-size: 12px; word-break: break-all; margin-top: 4px; }
+  #remove-node-btn {
+    margin-top: 20px; padding: 8px 12px; border: 1px solid #d33; border-radius: 4px;
+    background: #fff0f0; color: #d33; cursor: pointer; width: 100%; font-size: 13px;
+  }
+  #remove-node-btn:hover { background: #ffe0e0; }
+  #link-form { display: flex; align-items: center; gap: 6px; }
+  #link-form.hidden { display: none; }
+  #link-form input {
+    padding: 4px 8px; border: 1px solid #555; border-radius: 4px;
+    background: #10131a; color: #eee; font-size: 13px; width: 140px;
+  }
+  #link-form button { padding: 4px 10px; font-size: 12px; }
+  #link-confirm-btn { background: #2f6b3a; border-color: #2f6b3a; }
+  #link-confirm-btn:hover { background: #398046; }
+  #link-cancel-btn { background: #6b2f2f; border-color: #6b2f2f; }
+  #link-cancel-btn:hover { background: #803939; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <h1>GossipSea — Interactive Graph</h1>
+    <button id="add-link-toggle">Add Link: OFF</button>
+    <button id="export-cypher-btn">Export Cypher</button>
+    <div id="link-form" class="hidden">
+      <input id="link-type-input" type="text" value="RELATED_TO">
+      <button id="link-confirm-btn">Confirm</button>
+      <button id="link-cancel-btn">Cancel</button>
+    </div>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-swatch" style="background:#6baed6"></span>Person</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#74c476"></span>Company</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#fd8d3c"></span>Address</span>
+    </div>
+    <div id="status-bar"></div>
+  </div>
+  <div id="main">
+    <div id="network"></div>
+    <div id="side-panel" class="hidden"></div>
+  </div>
+</div>
+
+<script>
+const GRAPH_DATA = __GRAPH_DATA_JSON__;
+
+function esc(s) {
+  if (s === null || s === undefined) return "";
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+function cypherStr(s) {
+  return (s === null || s === undefined || s === "") ? "null" : `"${esc(s)}"`;
+}
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = String(s ?? "");
+  return div.innerHTML;
+}
+function escapeAttr(s) {
+  return String(s ?? "").replace(/"/g, "&quot;");
+}
+function sanitizeRelType(t) {
+  const clean = String(t || "RELATED_TO").toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+  return clean || "RELATED_TO";
+}
+
+const container = document.getElementById("network");
+const visNodes = GRAPH_DATA.nodes.map(n => Object.assign({}, n, { group: n.type }));
+const nodes = new vis.DataSet(visNodes);
+const edges = new vis.DataSet(GRAPH_DATA.edges);
+const network = new vis.Network(container, { nodes, edges }, {
+  nodes: { shape: "dot", size: 16, font: { size: 14 } },
+  edges: { arrows: "to", font: { size: 10, align: "middle" }, color: "#888888" },
+  groups: {
+    Person: { color: { background: "#6baed6", border: "#4a8fc2" } },
+    Company: { color: { background: "#74c476", border: "#4f9e57" } },
+    Address: { color: { background: "#fd8d3c", border: "#d9701f" } },
+  },
+  physics: { stabilization: true },
+  interaction: { hover: true },
+});
+
+// Freeze the layout once it settles — continuous physics drift makes nodes
+// hard to click precisely (a click can silently miss a moving node).
+network.once("stabilizationIterationsDone", function () {
+  network.setOptions({ physics: false });
+});
+
+function setStatus(msg) {
+  document.getElementById("status-bar").textContent = msg || "";
+}
+
+// --- Side panel ---
+
+function showPanel(node) {
+  const panel = document.getElementById("side-panel");
+  let html = `<h2>${escapeHtml(node.label)}</h2><div class="node-type">${escapeHtml(node.type)}</div>`;
+  html += "<div class='props'>";
+  for (const [k, v] of Object.entries(node.properties || {})) {
+    html += `<div class="prop-row"><span class="prop-key">${escapeHtml(k)}</span><span class="prop-value">${escapeHtml(v)}</span></div>`;
+  }
+  html += "</div>";
+  html += "<div class='source-section'><h3>Source</h3>";
+  html += `<div>${escapeHtml(node.source || "Unknown")}</div>`;
+  if (node.source_url) {
+    html += `<a href="${escapeAttr(node.source_url)}" target="_blank" rel="noopener">${escapeHtml(node.source_url)}</a>`;
+  }
+  html += "</div>";
+  html += `<button id="remove-node-btn">Remove node</button>`;
+  panel.innerHTML = html;
+  panel.classList.remove("hidden");
+  document.getElementById("remove-node-btn").addEventListener("click", () => removeNode(node.id));
+}
+
+function hidePanel() {
+  document.getElementById("side-panel").classList.add("hidden");
+}
+
+function removeNode(nodeId) {
+  const toRemove = edges.get().filter(e => e.from === nodeId || e.to === nodeId).map(e => e.id);
+  if (toRemove.length) edges.remove(toRemove);
+  nodes.remove(nodeId);
+  hidePanel();
+}
+
+// --- Add-link mode ---
+
+let addLinkMode = false;
+let pendingFrom = null;
+let pendingTo = null;
+
+const linkForm = document.getElementById("link-form");
+const linkTypeInput = document.getElementById("link-type-input");
+
+function showLinkForm() {
+  linkForm.classList.remove("hidden");
+  linkTypeInput.value = "RELATED_TO";
+  linkTypeInput.focus();
+  linkTypeInput.select();
+}
+
+function hideLinkForm() {
+  linkForm.classList.add("hidden");
+}
+
+function resetAddLinkState() {
+  pendingFrom = null;
+  pendingTo = null;
+  hideLinkForm();
+  network.unselectAll();
+}
+
+function handleAddLinkClick(nodeId) {
+  if (pendingTo !== null) {
+    // A link is already pending confirmation — ignore further node clicks until resolved.
+    return;
+  }
+  if (pendingFrom === null) {
+    pendingFrom = nodeId;
+    network.selectNodes([nodeId]);
+    setStatus(`Select target node for link from "${nodes.get(nodeId).label}"...`);
+    return;
+  }
+  if (pendingFrom === nodeId) {
+    setStatus("Cannot link a node to itself — pick a different target. Add-link mode still on.");
+    return;
+  }
+  pendingTo = nodeId;
+  network.selectNodes([pendingFrom, nodeId]);
+  setStatus(`Linking "${nodes.get(pendingFrom).label}" -> "${nodes.get(nodeId).label}". Enter a relationship type and confirm.`);
+  showLinkForm();
+}
+
+document.getElementById("link-confirm-btn").addEventListener("click", function () {
+  if (pendingFrom === null || pendingTo === null) return;
+  const type = sanitizeRelType(linkTypeInput.value);
+  const edgeId = "e_user_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+  edges.add({ id: edgeId, from: pendingFrom, to: pendingTo, type: type, label: type, properties: {} });
+  setStatus(`Link "${type}" added. Add-link mode still on.`);
+  resetAddLinkState();
+});
+
+document.getElementById("link-cancel-btn").addEventListener("click", function () {
+  setStatus("Add-link cancelled. Add-link mode still on.");
+  resetAddLinkState();
+});
+
+linkTypeInput.addEventListener("keydown", function (e) {
+  if (e.key === "Enter") document.getElementById("link-confirm-btn").click();
+  if (e.key === "Escape") document.getElementById("link-cancel-btn").click();
+});
+
+document.getElementById("add-link-toggle").addEventListener("click", function () {
+  addLinkMode = !addLinkMode;
+  resetAddLinkState();
+  this.textContent = addLinkMode ? "Add Link: ON" : "Add Link: OFF";
+  this.classList.toggle("active", addLinkMode);
+  setStatus(addLinkMode ? "Add-link mode on: click a source node, then a target node." : "");
+});
+
+network.on("click", function (params) {
+  if (params.nodes.length > 0) {
+    const nodeId = params.nodes[0];
+    if (addLinkMode) {
+      handleAddLinkClick(nodeId);
+    } else {
+      showPanel(nodes.get(nodeId));
+    }
+  } else if (addLinkMode) {
+    if (pendingTo === null) {
+      setStatus("That click missed every node — click directly on a node's dot.");
+    }
+  } else {
+    hidePanel();
+  }
+});
+
+// --- Cypher export ---
+
+function keyPartsFor(node) {
+  if (node.type === "Person") {
+    return [
+      `first_name: ${cypherStr(node.key.first_name)}`,
+      `last_name: ${cypherStr(node.key.last_name)}`,
+      `birth_date: ${cypherStr(node.key.birth_date)}`,
+    ];
+  } else if (node.type === "Address") {
+    return [
+      `street: ${cypherStr(node.key.street)}`,
+      `postal_code: ${cypherStr(node.key.postal_code)}`,
+    ];
+  }
+  return [`siret: ${cypherStr(node.key.siret)}`];
+}
+
+function clause(verb, alias, node) {
+  return `${verb} (${alias}:${node.type} {${keyPartsFor(node).join(", ")}})`;
+}
+
+function nodeMergeLine(node) {
+  const alias = node.type === "Person" ? "p" : node.type === "Address" ? "a" : "c";
+  let line = clause("MERGE", alias, node);
+  const sets = [];
+  for (const [k, v] of Object.entries(node.merge_props || {})) {
+    if (v === null || v === undefined || v === "") continue;
+    sets.push(`${alias}.${k} = ${cypherStr(v)}`);
+  }
+  if (node.type === "Person" || node.type === "Address") {
+    if (node.source) sets.push(`${alias}.source = ${cypherStr(node.source)}`);
+    if (node.source_url) sets.push(`${alias}.source_url = ${cypherStr(node.source_url)}`);
+  }
+  if (sets.length) line += "\n  ON CREATE SET " + sets.join(", ");
+  return line + ";";
+}
+
+function edgeCypher(edge, nodesById) {
+  const fromNode = nodesById[edge.from];
+  const toNode = nodesById[edge.to];
+  if (!fromNode || !toNode) return null;
+  const lines = [clause("MATCH", "src", fromNode), clause("MATCH", "dst", toNode)];
+  const propParts = Object.entries(edge.properties || {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .map(([k, v]) => `${k}: ${cypherStr(v)}`);
+  const propStr = propParts.length ? ` {${propParts.join(", ")}}` : "";
+  lines.push(`MERGE (src)-[:${sanitizeRelType(edge.type)}${propStr}]->(dst);`);
+  return lines.join("\n");
+}
+
+function downloadText(text, filename, mime) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportCypher() {
+  const allNodes = nodes.get();
+  const allEdges = edges.get();
+  const nodesById = {};
+  allNodes.forEach(n => { nodesById[n.id] = n; });
+
+  const byType = { Person: [], Address: [], Company: [] };
+  allNodes.forEach(n => { if (byType[n.type]) byType[n.type].push(n); });
+
+  const lines = [];
+  lines.push("// Person nodes");
+  byType.Person.forEach(n => lines.push(nodeMergeLine(n)));
+  lines.push("\n// Address nodes");
+  byType.Address.forEach(n => lines.push(nodeMergeLine(n)));
+  lines.push("\n// Company nodes");
+  byType.Company.forEach(n => lines.push(nodeMergeLine(n)));
+  lines.push("\n// Relationships");
+  allEdges.forEach(e => {
+    const cypher = edgeCypher(e, nodesById);
+    if (cypher) lines.push(cypher);
+  });
+
+  downloadText(lines.join("\n") + "\n", "graph_edited.cypher", "text/plain");
+  setStatus("Cypher file exported.");
+}
+
+document.getElementById("export-cypher-btn").addEventListener("click", exportCypher);
+</script>
+</body>
+</html>

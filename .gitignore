@@ -9,6 +9,7 @@ uv.lock
 
 #Test files
 output.cypher
+output.html
 # Virtual environments
 .venv
 

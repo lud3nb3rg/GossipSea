@@ -47,7 +47,7 @@ def _parse_director_href(href: str) -> tuple[str, str, str]:
 PersonKey = tuple[str, str, str | None]
 
 
-def _extract_directors(driver, person_registry: dict[PersonKey, Person]) -> list[Director]:
+def _extract_directors(driver, person_registry: dict[PersonKey, Person], source_url: str) -> list[Director]:
     directors = []
     for item in driver.find_elements(By.XPATH, "//li[contains(@class,'dirigeant')]"):
         anchor = item.find_element(By.XPATH, ".//div[@class='nom']//a")
@@ -61,7 +61,8 @@ def _extract_directors(driver, person_registry: dict[PersonKey, Person]) -> list
         since_text = item.find_element(By.XPATH, ".//span[@class='date']").text.strip()
         key: PersonKey = (first_name, last_name, birth_date or None)
         if key not in person_registry:
-            person_registry[key] = Person(first_name, last_name, birth_date=key[2])
+            person_registry[key] = Person(first_name, last_name, birth_date=key[2],
+                                           source="Pappers", source_url=source_url)
         directors.append(Director(person_registry[key], role, since_text))
     return directors
 
@@ -129,8 +130,8 @@ def lookup(first_name: str, last_name: str) -> List[PapperResultSociety]:
         postal_code_city = address_parts[1].split(" ")
         postal_code = postal_code_city[0]
         city = " ".join(postal_code_city[1:])
-        address = Address(street, city, postal_code)
-        directors = _extract_directors(driver, person_registry)
+        address = Address(street, city, postal_code, source="Pappers", source_url=result_link)
+        directors = _extract_directors(driver, person_registry, result_link)
         result = PapperResultSociety(name, address, siret, creation_date, result_link, directors)
         results.append(result)
     driver.quit()

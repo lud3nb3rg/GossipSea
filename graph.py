@@ -1,6 +1,3 @@
-import networkx as nx
-import matplotlib.pyplot as plt
-
 from nodes import Person, Address, Director
 from pappers_scrapper import PapperResultSociety, PersonKey
 
@@ -53,15 +50,27 @@ class GossipGraph:
             line = (
                 f'MERGE (p:Person {{first_name: "{_esc(fn)}", last_name: "{_esc(ln)}", birth_date: {_cypher_str(bd)}}})'
             )
+            sets = []
             if p.birth_place:
-                line += f'\n  ON CREATE SET p.birth_place = "{_esc(p.birth_place)}"'
+                sets.append(f'p.birth_place = "{_esc(p.birth_place)}"')
+            if p.source:
+                sets.append(f'p.source = "{_esc(p.source)}"')
+            if p.source_url:
+                sets.append(f'p.source_url = "{_esc(p.source_url)}"')
+            if sets:
+                line += "\n  ON CREATE SET " + ", ".join(sets)
             lines.append(line + ";")
 
         lines.append("\n// Address nodes")
         for (street, city, postal_code), addr in self._addresses.items():
+            sets = [f'a.city = "{_esc(city)}"']
+            if addr.source:
+                sets.append(f'a.source = "{_esc(addr.source)}"')
+            if addr.source_url:
+                sets.append(f'a.source_url = "{_esc(addr.source_url)}"')
             lines.append(
                 f'MERGE (a:Address {{street: "{_esc(street)}", postal_code: "{_esc(postal_code)}"}}) '
-                f'ON CREATE SET a.city = "{_esc(city)}";'
+                f'ON CREATE SET ' + ", ".join(sets) + ";"
             )
 
         lines.append("\n// Company nodes")
@@ -92,52 +101,86 @@ class GossipGraph:
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
 
-    def display(self) -> None:
-        G = nx.MultiDiGraph()
+    def to_graph_data(self) -> dict:
+        """Build a JSON-serializable {"nodes": [...], "edges": [...]} structure for the interactive HTML export."""
+        nodes: list[dict] = []
+        edges: list[dict] = []
 
-        node_colors: dict[str, str] = {}
+        for (fn, ln, bd), p in self._persons.items():
+            nodes.append({
+                "id": f"person:{fn}:{ln}:{bd}",
+                "type": "Person",
+                "label": f"{fn} {ln}",
+                "properties": {
+                    "First name": p.first_name,
+                    "Last name": p.last_name,
+                    "Birth date": p.birth_date,
+                    "Birth place": p.birth_place,
+                },
+                "key": {"first_name": fn, "last_name": ln, "birth_date": bd},
+                "merge_props": {"birth_place": p.birth_place} if p.birth_place else {},
+                "source": p.source,
+                "source_url": p.source_url,
+            })
 
-        for (fn, ln, bd), _ in self._persons.items():
-            node_id = f"person:{fn}:{ln}:{bd}"
-            label = f"{fn} {ln}"
-            G.add_node(node_id, label=label)
-            node_colors[node_id] = "#6baed6"  # blue
-
-        for (street, city, postal_code) in self._addresses:
-            node_id = f"addr:{street}:{postal_code}"
-            label = f"{street}\n{postal_code} {city}"
-            G.add_node(node_id, label=label)
-            node_colors[node_id] = "#fd8d3c"  # orange
+        for (street, city, postal_code), addr in self._addresses.items():
+            nodes.append({
+                "id": f"addr:{street}:{postal_code}",
+                "type": "Address",
+                "label": f"{street}\n{postal_code} {city}",
+                "properties": {
+                    "Street": addr.street,
+                    "City": addr.city,
+                    "Postal code": addr.postal_code,
+                },
+                "key": {"street": street, "postal_code": postal_code},
+                "merge_props": {"city": city},
+                "source": addr.source,
+                "source_url": addr.source_url,
+            })
 
         for siret, company in self._companies.items():
-            node_id = f"company:{siret}"
-            G.add_node(node_id, label=company.name)
-            node_colors[node_id] = "#74c476"  # green
+            nodes.append({
+                "id": f"company:{siret}",
+                "type": "Company",
+                "label": company.name,
+                "properties": {
+                    "Name": company.name,
+                    "SIRET": company.siret,
+                    "Creation date": company.creation_date,
+                    "Link": company.link,
+                },
+                "key": {"siret": siret},
+                "merge_props": {"name": company.name, "creation_date": company.creation_date, "link": company.link},
+                "source": "Pappers",
+                "source_url": company.link,
+            })
 
+        edge_id = 0
         for company, address in self._address_edges.values():
-            G.add_edge(f"company:{company.siret}", f"addr:{address.street}:{address.postal_code}", label="HAS_ADDRESS")
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"company:{company.siret}",
+                "to": f"addr:{address.street}:{address.postal_code}",
+                "type": "HAS_ADDRESS",
+                "label": "HAS_ADDRESS",
+                "properties": {},
+            })
+            edge_id += 1
 
         for person, company, director in self._director_edges.values():
-            person_id = f"person:{person.first_name}:{person.last_name}:{person.birth_date}"
-            G.add_edge(person_id, f"company:{company.siret}", label=director.role)
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"person:{person.first_name}:{person.last_name}:{person.birth_date}",
+                "to": f"company:{company.siret}",
+                "type": "DIRECTOR_OF",
+                "label": director.role,
+                "properties": {"role": director.role, "since_date": director.since_date},
+            })
+            edge_id += 1
 
-        pos = nx.spring_layout(G, seed=42, k=2)
-        labels = nx.get_node_attributes(G, "label")
-        colors = [node_colors[n] for n in G.nodes()]
-        edge_labels = {(u, v): d["label"] for u, v, d in G.edges(data=True)}
+        return {"nodes": nodes, "edges": edges}
 
-        plt.figure(figsize=(14, 9))
-        nx.draw(G, pos, labels=labels, node_color=colors, node_size=2000,
-                font_size=8, arrows=True, arrowsize=15,
-                edge_color="#888888", width=1.5, connectionstyle="arc3,rad=0.1")
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7)
-
-        legend = [
-            plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="#6baed6", markersize=12, label="Person"),
-            plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="#74c476", markersize=12, label="Company"),
-            plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="#fd8d3c", markersize=12, label="Address"),
-        ]
-        plt.legend(handles=legend, loc="upper left")
-        plt.title("GossipSea — OSINT Graph")
-        plt.tight_layout()
-        plt.show()
+    def export_html(self, path: str) -> None:
+        import graph_html
+        graph_html.export_html(self, path)
