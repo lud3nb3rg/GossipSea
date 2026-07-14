@@ -11,6 +11,7 @@ def test_lookup():
         assert hasattr(result, 'siret')
         assert hasattr(result, 'creation_date')
         assert hasattr(result, 'link')
+        assert hasattr(result, 'legal_form')
         assert isinstance(result.address, Address)
         assert result.address.source == "Pappers"
         assert result.address.source_url == result.link

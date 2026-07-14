@@ -75,15 +75,18 @@ def _has_next_page(driver) -> bool:
         return False
 
 class PapperResultSociety:
-    def __init__(self, name: str, address: Address, siret: str, creation_date: str, link: str, directors: list[Director]):
+    def __init__(self, name: str, address: Address, siret: str, creation_date: str, link: str,
+                 directors: list[Director], legal_form: str | None = None):
         self.name = name
         self.address = address
         self.siret = siret
         self.creation_date = creation_date
         self.link = link
         self.directors = directors
+        self.legal_form = legal_form
     def __str__(self):
-        return f"PapperResultSociety(name={self.name}, address={self.address}, siret={self.siret}, creation_date={self.creation_date}, link={self.link})"
+        return (f"PapperResultSociety(name={self.name}, address={self.address}, siret={self.siret}, "
+                f"creation_date={self.creation_date}, link={self.link}, legal_form={self.legal_form})")
 
 def lookup(first_name: str, last_name: str) -> List[PapperResultSociety]:
     """
@@ -120,6 +123,7 @@ def lookup(first_name: str, last_name: str) -> List[PapperResultSociety]:
             name = driver.find_element(By.XPATH, "//h1").text
             address_text = driver.find_element(By.XPATH, "//th[contains(text(),'Adresse')]/following-sibling::td").text
             creation_date = driver.find_element(By.XPATH, "//th[contains(text(),'ation :')]/following-sibling::td").text
+            legal_form = driver.find_element(By.XPATH, "//th[contains(text(),'Forme juridique')]/following-sibling::td").text
         except Exception:
             driver.quit()
             raise CaptchaError(f"Expected elements missing on {result_link} — Pappers may have triggered a CAPTCHA")
@@ -132,7 +136,7 @@ def lookup(first_name: str, last_name: str) -> List[PapperResultSociety]:
         city = " ".join(postal_code_city[1:])
         address = Address(street, city, postal_code, source="Pappers", source_url=result_link)
         directors = _extract_directors(driver, person_registry, result_link)
-        result = PapperResultSociety(name, address, siret, creation_date, result_link, directors)
+        result = PapperResultSociety(name, address, siret, creation_date, result_link, directors, legal_form=legal_form)
         results.append(result)
     driver.quit()
 

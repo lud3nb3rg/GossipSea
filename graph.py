@@ -4,6 +4,14 @@ from pappers_scrapper import PapperResultSociety, PersonKey
 AddressKey = tuple[str, str, str]                # normalized (street, city, postal_code)
 AddressEdgeKey = tuple[str, AddressKey]          # (siret_key, addr_key)
 DirectorEdgeKey = tuple[PersonKey, str]           # (person_key, siret_key)
+ProbableHomeEdgeKey = tuple[AddressKey, PersonKey]
+
+# Legal forms (normalized) under which a company's registered address is treated as the
+# director's probable home address, rather than a business premises.
+_PROBABLE_HOME_LEGAL_FORMS = {
+    "entrepreneur individuel",
+    "sci, société civile immobilière",
+}
 
 
 def _esc(s: str | None) -> str:
@@ -30,6 +38,7 @@ class GossipGraph:
         # Dicts instead of lists to deduplicate across multiple load_pappers() calls
         self._address_edges: dict[AddressEdgeKey, tuple[PapperResultSociety, Address]] = {}
         self._director_edges: dict[DirectorEdgeKey, tuple[Person, PapperResultSociety, Director]] = {}
+        self._probable_home_edges: dict[ProbableHomeEdgeKey, tuple[Address, Person]] = {}
 
     def load_pappers(self, results: list[PapperResultSociety]) -> None:
         for company in results:
@@ -45,12 +54,18 @@ class GossipGraph:
                 self._addresses[addr_key] = company.address
             self._address_edges[(siret_key, addr_key)] = (company, self._addresses[addr_key])
 
+            is_probable_home = _norm(company.legal_form) in _PROBABLE_HOME_LEGAL_FORMS
+
             for director in company.directors:
                 p = director.person
                 person_key: PersonKey = (_norm(p.first_name), _norm(p.last_name), _norm(p.birth_date))
                 if person_key not in self._persons:
                     self._persons[person_key] = p
                 self._director_edges[(person_key, siret_key)] = (self._persons[person_key], company, director)
+                if is_probable_home:
+                    self._probable_home_edges[(addr_key, person_key)] = (
+                        self._addresses[addr_key], self._persons[person_key],
+                    )
 
     def export_cypher(self, path: str) -> None:
         lines: list[str] = []
@@ -90,12 +105,17 @@ class GossipGraph:
 
         lines.append("\n// Company nodes")
         for siret_key, company in self._companies.items():
+            sets = [
+                f'c.siret = "{_esc(company.siret)}"',
+                f'c.name = "{_esc(company.name)}"',
+                f'c.creation_date = "{_esc(company.creation_date)}"',
+                f'c.link = "{_esc(company.link)}"',
+            ]
+            if company.legal_form:
+                sets.append(f'c.legal_form = "{_esc(company.legal_form)}"')
             lines.append(
                 f'MERGE (c:Company {{siret_key: "{_esc(siret_key)}"}}) '
-                f'ON CREATE SET c.siret = "{_esc(company.siret)}", '
-                f'c.name = "{_esc(company.name)}", '
-                f'c.creation_date = "{_esc(company.creation_date)}", '
-                f'c.link = "{_esc(company.link)}";'
+                f'ON CREATE SET ' + ", ".join(sets) + ";"
             )
 
         lines.append("\n// HAS_ADDRESS edges")
@@ -114,6 +134,16 @@ class GossipGraph:
                 f'MATCH (p:Person {{first_name_key: "{_esc(fn_key)}", last_name_key: "{_esc(ln_key)}", birth_date_key: {_cypher_str(bd_key)}}})\n'
                 f'MATCH (c:Company {{siret_key: "{_esc(siret_key)}"}})\n'
                 f'MERGE (p)-[:DIRECTOR_OF {{role: "{_esc(director.role)}", since_date: "{_esc(director.since_date)}"}}]->(c);'
+            )
+
+        lines.append("\n// PROBABLE_HOME edges")
+        for (addr_key, person_key), (address, person) in self._probable_home_edges.items():
+            street_key, city_key, postal_key = addr_key
+            fn_key, ln_key, bd_key = person_key
+            lines.append(
+                f'MATCH (a:Address {{street_key: "{_esc(street_key)}", city_key: "{_esc(city_key)}", postal_code_key: "{_esc(postal_key)}"}})\n'
+                f'MATCH (p:Person {{first_name_key: "{_esc(fn_key)}", last_name_key: "{_esc(ln_key)}", birth_date_key: {_cypher_str(bd_key)}}})\n'
+                f'MERGE (a)-[:PROBABLE_HOME]->(p);'
             )
 
         with open(path, "w", encoding="utf-8") as f:
@@ -170,6 +200,7 @@ class GossipGraph:
                 "properties": {
                     "Name": company.name,
                     "SIRET": company.siret,
+                    "Legal form": company.legal_form,
                     "Creation date": company.creation_date,
                     "Link": company.link,
                 },
@@ -179,6 +210,7 @@ class GossipGraph:
                     "name": company.name,
                     "creation_date": company.creation_date,
                     "link": company.link,
+                    **({"legal_form": company.legal_form} if company.legal_form else {}),
                 },
                 "source": "Pappers",
                 "source_url": company.link,
@@ -206,6 +238,19 @@ class GossipGraph:
                 "type": "DIRECTOR_OF",
                 "label": director.role,
                 "properties": {"role": director.role, "since_date": director.since_date},
+            })
+            edge_id += 1
+
+        for (addr_key, person_key), (address, person) in self._probable_home_edges.items():
+            street_key, city_key, postal_key = addr_key
+            fn_key, ln_key, bd_key = person_key
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"addr:{street_key}:{city_key}:{postal_key}",
+                "to": f"person:{fn_key}:{ln_key}:{bd_key}",
+                "type": "PROBABLE_HOME",
+                "label": "PROBABLE_HOME",
+                "properties": {},
             })
             edge_id += 1
 

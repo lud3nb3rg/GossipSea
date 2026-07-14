@@ -18,6 +18,7 @@ def _sample_results() -> list[PapperResultSociety]:
         creation_date="01/01/2020",
         link="https://www.pappers.fr/entreprise/1",
         directors=[director],
+        legal_form="SARL",
     )
     return [company]
 
@@ -56,6 +57,11 @@ def test_to_graph_data_is_json_serializable_and_consistent():
 
     company_node = next(n for n in data["nodes"] if n["type"] == "Company")
     assert company_node["key"] == {"siret_key": "12345678900012"}
+    assert company_node["properties"]["Legal form"] == "SARL"
+    assert company_node["merge_props"]["legal_form"] == "SARL"
+
+    # An ordinary SARL is not a probable home address for its director.
+    assert not any(e["type"] == "PROBABLE_HOME" for e in data["edges"])
 
 
 def test_addresses_merge_case_insensitively_on_street_city_and_postal_code():
@@ -104,6 +110,47 @@ def test_persons_and_companies_merge_case_insensitively():
     # Same (person, company) relationship seen twice under different casing dedupes to one edge.
     director_edges = [e for e in data["edges"] if e["type"] == "DIRECTOR_OF"]
     assert len(director_edges) == 1
+
+
+def test_probable_home_edge_created_for_entrepreneur_individuel():
+    address = Address("1 Rue de la Paix", "Paris", "75002", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
+    person = Person("Jean", "Dupont", birth_date="1980-05", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
+    director = Director(person, "Exploitant", "01/01/2020")
+    company = PapperResultSociety(
+        name="Jean Dupont EI", address=address, siret="12345678900012", creation_date="01/01/2020",
+        link="https://www.pappers.fr/entreprise/1", directors=[director],
+        legal_form="entrepreneur individuel",  # different casing than the match set, on purpose
+    )
+
+    graph = GossipGraph()
+    graph.load_pappers([company])
+    data = graph.to_graph_data()
+
+    home_edges = [e for e in data["edges"] if e["type"] == "PROBABLE_HOME"]
+    assert len(home_edges) == 1
+    addr_id = next(n["id"] for n in data["nodes"] if n["type"] == "Address")
+    person_id = next(n["id"] for n in data["nodes"] if n["type"] == "Person")
+    assert home_edges[0]["from"] == addr_id
+    assert home_edges[0]["to"] == person_id
+
+
+def test_probable_home_edge_created_for_sci():
+    address = Address("1 Rue de la Paix", "Paris", "75002", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
+    person_a = Person("Jean", "Dupont", birth_date="1980-05", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
+    person_b = Person("Marie", "Martin", birth_date="1982-03", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
+    company = PapperResultSociety(
+        name="SCI Les Tilleuls", address=address, siret="12345678900012", creation_date="01/01/2020",
+        link="https://www.pappers.fr/entreprise/1",
+        directors=[Director(person_a, "Gérant", "01/01/2020"), Director(person_b, "Gérante", "01/01/2020")],
+        legal_form="SCI, Société Civile Immobilière",
+    )
+
+    graph = GossipGraph()
+    graph.load_pappers([company])
+    data = graph.to_graph_data()
+
+    home_edges = [e for e in data["edges"] if e["type"] == "PROBABLE_HOME"]
+    assert len(home_edges) == 2
 
 
 def test_render_html_embeds_valid_graph_data():
