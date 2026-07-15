@@ -38,7 +38,7 @@ def main() -> None:
             results = lookup(args.first_name, args.last_name)
         except CaptchaError as e:
             print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
+            results = []
         print(f"Found {len(results)} company/companies.")
         graph.load_pappers(results)
 
