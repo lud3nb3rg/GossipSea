@@ -45,12 +45,25 @@ class GossipGraph:
         self._emails: dict[EmailKey, Email] = {}
         self._online_accounts: dict[OnlineAccountKey, OnlineAccount] = {}
         self._registered_on_edges: dict[RegisteredOnEdgeKey, tuple[Email, OnlineAccount]] = {}
+        self._person_email_edges: dict[tuple[PersonKey, EmailKey], tuple[Person, Email]] = {}
 
         # Maps a normalized (first_name, last_name) to the PersonKey of the "original" Person
         # node for a --first-name/--last-name entrypoint, so load_pappers can alias-match
         # directors onto it by name alone instead of creating a second, birth-date-qualified
         # Person node.
         self._original_person_name_keys: dict[tuple[str, str], PersonKey] = {}
+
+        # Track the single original Person/Email entrypoint (if given), so that once both are
+        # present we can link them regardless of which one was registered first.
+        self._original_person_key: PersonKey | None = None
+        self._original_email_key: EmailKey | None = None
+
+    def _link_original_person_and_email(self) -> None:
+        if self._original_person_key is None or self._original_email_key is None:
+            return
+        person = self._persons[self._original_person_key]
+        email = self._emails[self._original_email_key]
+        self._person_email_edges[(self._original_person_key, self._original_email_key)] = (person, email)
 
     def add_original_person(self, first_name: str, last_name: str) -> None:
         """
@@ -63,14 +76,18 @@ class GossipGraph:
         fn_key, ln_key = _norm(first_name), _norm(last_name)
         person_key: PersonKey = (fn_key, ln_key, None)
         if person_key not in self._persons:
-            self._persons[person_key] = Person(first_name, last_name)
+            self._persons[person_key] = Person(first_name, last_name, source="Provided by user")
         self._original_person_name_keys[(fn_key, ln_key)] = person_key
+        self._original_person_key = person_key
+        self._link_original_person_and_email()
 
     def add_original_email(self, email: str) -> None:
         """Registers the CLI entrypoint's own Email node, regardless of scraper results."""
         email_key = _norm(email)
         if email_key not in self._emails:
-            self._emails[email_key] = Email(email)
+            self._emails[email_key] = Email(email, source="Provided by user")
+        self._original_email_key = email_key
+        self._link_original_person_and_email()
 
     def load_holehe(self, email: str, results: list[OnlineAccount]) -> None:
         email_key = _norm(email)
@@ -226,6 +243,15 @@ class GossipGraph:
                 f'MATCH (a:Address {{street_key: "{_esc(street_key)}", city_key: "{_esc(city_key)}", postal_code_key: "{_esc(postal_key)}"}})\n'
                 f'MATCH (p:Person {{first_name_key: "{_esc(fn_key)}", last_name_key: "{_esc(ln_key)}", birth_date_key: {_cypher_str(bd_key)}}})\n'
                 f'MERGE (a)-[:PROBABLE_HOME]->(p);'
+            )
+
+        lines.append("\n// EMAIL edges")
+        for (person_key, email_key), (person, email) in self._person_email_edges.items():
+            fn_key, ln_key, bd_key = person_key
+            lines.append(
+                f'MATCH (p:Person {{first_name_key: "{_esc(fn_key)}", last_name_key: "{_esc(ln_key)}", birth_date_key: {_cypher_str(bd_key)}}})\n'
+                f'MATCH (e:Email {{address_key: "{_esc(email_key)}"}})\n'
+                f'MERGE (p)-[:EMAIL]->(e);'
             )
 
         lines.append("\n// REGISTERED_ON edges")
@@ -385,6 +411,18 @@ class GossipGraph:
                 "to": f"account:{site_key}:{domain_key}",
                 "type": "REGISTERED_ON",
                 "label": "REGISTERED_ON",
+                "properties": {},
+            })
+            edge_id += 1
+
+        for (person_key, email_key), (person, email) in self._person_email_edges.items():
+            fn_key, ln_key, bd_key = person_key
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"person:{fn_key}:{ln_key}:{bd_key}",
+                "to": f"email:{email_key}",
+                "type": "EMAIL",
+                "label": "EMAIL",
                 "properties": {},
             })
             edge_id += 1

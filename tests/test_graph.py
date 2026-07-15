@@ -169,6 +169,33 @@ def test_add_original_person_merges_matching_director_and_enriches_birth_date():
     assert director_edges[0]["from"] == person_nodes[0]["id"]
 
 
+def test_original_person_and_email_have_provided_by_user_source_and_are_linked():
+    graph = GossipGraph()
+    graph.add_original_person("Jean", "Dupont")
+    graph.add_original_email("jean.dupont@example.com")
+
+    data = graph.to_graph_data()
+    person_node = next(n for n in data["nodes"] if n["type"] == "Person")
+    email_node = next(n for n in data["nodes"] if n["type"] == "Email")
+    assert person_node["source"] == "Provided by user"
+    assert email_node["source"] == "Provided by user"
+
+    email_edges = [e for e in data["edges"] if e["type"] == "EMAIL"]
+    assert len(email_edges) == 1
+    assert email_edges[0]["from"] == person_node["id"]
+    assert email_edges[0]["to"] == email_node["id"]
+
+
+def test_original_person_and_email_link_regardless_of_call_order():
+    graph = GossipGraph()
+    graph.add_original_email("jean.dupont@example.com")
+    graph.add_original_person("Jean", "Dupont")
+
+    data = graph.to_graph_data()
+    email_edges = [e for e in data["edges"] if e["type"] == "EMAIL"]
+    assert len(email_edges) == 1
+
+
 def test_load_pappers_before_add_original_person_does_not_retroactively_merge():
     graph = GossipGraph()
     graph.load_pappers(_sample_results())

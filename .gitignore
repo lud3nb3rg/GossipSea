@@ -6,6 +6,7 @@ dist/
 wheels/
 *.egg-info
 uv.lock
+.pytest_cache/
 
 #Test files
 output.cypher
@@ -15,3 +16,4 @@ output.html
 
 #ClAUDE
 CLAUDE.md
+.claude/
