@@ -70,6 +70,8 @@
       <span class="legend-item"><span class="legend-swatch" style="background:#6baed6"></span>Person</span>
       <span class="legend-item"><span class="legend-swatch" style="background:#74c476"></span>Company</span>
       <span class="legend-item"><span class="legend-swatch" style="background:#fd8d3c"></span>Address</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#9e9ac8"></span>Email</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#fb6a4a"></span>OnlineAccount</span>
     </div>
     <div id="status-bar"></div>
   </div>
@@ -113,6 +115,8 @@ const network = new vis.Network(container, { nodes, edges }, {
     Person: { color: { background: "#6baed6", border: "#4a8fc2" } },
     Company: { color: { background: "#74c476", border: "#4f9e57" } },
     Address: { color: { background: "#fd8d3c", border: "#d9701f" } },
+    Email: { color: { background: "#9e9ac8", border: "#7b7bb5" } },
+    OnlineAccount: { color: { background: "#fb6a4a", border: "#d94701" } },
   },
   physics: { stabilization: true },
   interaction: { hover: true },
@@ -268,8 +272,17 @@ function keyPartsFor(node) {
       `city_key: ${cypherStr(node.key.city_key)}`,
       `postal_code_key: ${cypherStr(node.key.postal_code_key)}`,
     ];
+  } else if (node.type === "Company") {
+    return [`siret_key: ${cypherStr(node.key.siret_key)}`];
+  } else if (node.type === "Email") {
+    return [`address_key: ${cypherStr(node.key.address_key)}`];
+  } else if (node.type === "OnlineAccount") {
+    return [
+      `site_key: ${cypherStr(node.key.site_key)}`,
+      `domain_key: ${cypherStr(node.key.domain_key)}`,
+    ];
   }
-  return [`siret_key: ${cypherStr(node.key.siret_key)}`];
+  return [];
 }
 
 function clause(verb, alias, node) {
@@ -277,14 +290,18 @@ function clause(verb, alias, node) {
 }
 
 function nodeMergeLine(node) {
-  const alias = node.type === "Person" ? "p" : node.type === "Address" ? "a" : "c";
+  const alias = node.type === "Person" ? "p"
+    : node.type === "Address" ? "a"
+    : node.type === "Company" ? "c"
+    : node.type === "Email" ? "e"
+    : "oa"; // OnlineAccount
   let line = clause("MERGE", alias, node);
   const sets = [];
   for (const [k, v] of Object.entries(node.merge_props || {})) {
     if (v === null || v === undefined || v === "") continue;
     sets.push(`${alias}.${k} = ${cypherStr(v)}`);
   }
-  if (node.type === "Person" || node.type === "Address") {
+  if (["Person", "Address", "Email", "OnlineAccount"].includes(node.type)) {
     if (node.source) sets.push(`${alias}.source = ${cypherStr(node.source)}`);
     if (node.source_url) sets.push(`${alias}.source_url = ${cypherStr(node.source_url)}`);
   }
@@ -323,7 +340,7 @@ function exportCypher() {
   const nodesById = {};
   allNodes.forEach(n => { nodesById[n.id] = n; });
 
-  const byType = { Person: [], Address: [], Company: [] };
+  const byType = { Person: [], Address: [], Company: [], Email: [], OnlineAccount: [] };
   allNodes.forEach(n => { if (byType[n.type]) byType[n.type].push(n); });
 
   const lines = [];
@@ -333,6 +350,10 @@ function exportCypher() {
   byType.Address.forEach(n => lines.push(nodeMergeLine(n)));
   lines.push("\n// Company nodes");
   byType.Company.forEach(n => lines.push(nodeMergeLine(n)));
+  lines.push("\n// Email nodes");
+  byType.Email.forEach(n => lines.push(nodeMergeLine(n)));
+  lines.push("\n// OnlineAccount nodes");
+  byType.OnlineAccount.forEach(n => lines.push(nodeMergeLine(n)));
   lines.push("\n// Relationships");
   allEdges.forEach(e => {
     const cypher = edgeCypher(e, nodesById);

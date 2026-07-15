@@ -2,7 +2,7 @@ import json
 
 import graph_html
 from graph import GossipGraph
-from nodes import Address, Director, Person
+from nodes import Address, Director, OnlineAccount, Person
 from pappers_scrapper import PapperResultSociety
 
 
@@ -151,6 +151,59 @@ def test_probable_home_edge_created_for_sci():
 
     home_edges = [e for e in data["edges"] if e["type"] == "PROBABLE_HOME"]
     assert len(home_edges) == 2
+
+
+def test_add_original_person_merges_matching_director_and_enriches_birth_date():
+    graph = GossipGraph()
+    graph.add_original_person("Jean", "Dupont")
+    graph.load_pappers(_sample_results())
+
+    data = graph.to_graph_data()
+    person_nodes = [n for n in data["nodes"] if n["type"] == "Person"]
+    assert len(person_nodes) == 1
+    assert person_nodes[0]["key"] == {"first_name_key": "jean", "last_name_key": "dupont", "birth_date_key": None}
+    assert person_nodes[0]["properties"]["Birth date"] == "1980-05"
+
+    director_edges = [e for e in data["edges"] if e["type"] == "DIRECTOR_OF"]
+    assert len(director_edges) == 1
+    assert director_edges[0]["from"] == person_nodes[0]["id"]
+
+
+def test_load_pappers_before_add_original_person_does_not_retroactively_merge():
+    graph = GossipGraph()
+    graph.load_pappers(_sample_results())
+    graph.add_original_person("Jean", "Dupont")
+
+    data = graph.to_graph_data()
+    assert len([n for n in data["nodes"] if n["type"] == "Person"]) == 2
+
+
+def test_load_holehe_creates_email_and_account_nodes_with_edge():
+    graph = GossipGraph()
+    graph.add_original_email("someone@example.com")
+    account = OnlineAccount(site="twitter", domain="twitter.com", method="register", source="holehe")
+    graph.load_holehe("someone@example.com", [account])
+
+    data = graph.to_graph_data()
+    email_nodes = [n for n in data["nodes"] if n["type"] == "Email"]
+    account_nodes = [n for n in data["nodes"] if n["type"] == "OnlineAccount"]
+    reg_edges = [e for e in data["edges"] if e["type"] == "REGISTERED_ON"]
+
+    assert len(email_nodes) == 1
+    assert len(account_nodes) == 1
+    assert len(reg_edges) == 1
+    assert reg_edges[0]["from"] == email_nodes[0]["id"]
+    assert reg_edges[0]["to"] == account_nodes[0]["id"]
+    assert account_nodes[0]["properties"]["Method"] == "register"
+
+
+def test_load_holehe_creates_email_node_even_without_add_original_email():
+    graph = GossipGraph()
+    account = OnlineAccount(site="twitter", domain="twitter.com", source="holehe")
+    graph.load_holehe("noone@example.com", [account])
+
+    data = graph.to_graph_data()
+    assert any(n["type"] == "Email" for n in data["nodes"])
 
 
 def test_render_html_embeds_valid_graph_data():

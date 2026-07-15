@@ -21,3 +21,18 @@ class Director:
         self.person = person
         self.role = role
         self.since_date = since_date
+
+class Email:
+    def __init__(self, address: str, source: str|None = None, source_url: str|None = None):
+        self.address = address
+        self.source = source
+        self.source_url = source_url
+
+class OnlineAccount:
+    def __init__(self, site: str, domain: str, method: str|None = None,
+                 source: str|None = None, source_url: str|None = None):
+        self.site = site
+        self.domain = domain
+        self.method = method
+        self.source = source
+        self.source_url = source_url

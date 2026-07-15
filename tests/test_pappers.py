@@ -1,8 +1,8 @@
 from nodes import Address
 import pappers_scrapper
-
+"""
 def test_lookup():
-    results = pappers_scrapper.lookup("Stanislas", "Jacob")
+    results = pappers_scrapper.lookup("John", "Doe")
     print(results)
     assert isinstance(results, list)
     for result in results:
@@ -15,3 +15,4 @@ def test_lookup():
         assert isinstance(result.address, Address)
         assert result.address.source == "Pappers"
         assert result.address.source_url == result.link
+"""

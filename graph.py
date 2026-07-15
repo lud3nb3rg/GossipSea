@@ -1,10 +1,13 @@
-from nodes import Person, Address, Director
+from nodes import Person, Address, Director, Email, OnlineAccount
 from pappers_scrapper import PapperResultSociety, PersonKey
 
 AddressKey = tuple[str, str, str]                # normalized (street, city, postal_code)
 AddressEdgeKey = tuple[str, AddressKey]          # (siret_key, addr_key)
 DirectorEdgeKey = tuple[PersonKey, str]           # (person_key, siret_key)
 ProbableHomeEdgeKey = tuple[AddressKey, PersonKey]
+EmailKey = str                                   # normalized email address
+OnlineAccountKey = tuple[str, str]               # normalized (site, domain)
+RegisteredOnEdgeKey = tuple[EmailKey, OnlineAccountKey]
 
 # Legal forms (normalized) under which a company's registered address is treated as the
 # director's probable home address, rather than a business premises.
@@ -39,6 +42,48 @@ class GossipGraph:
         self._address_edges: dict[AddressEdgeKey, tuple[PapperResultSociety, Address]] = {}
         self._director_edges: dict[DirectorEdgeKey, tuple[Person, PapperResultSociety, Director]] = {}
         self._probable_home_edges: dict[ProbableHomeEdgeKey, tuple[Address, Person]] = {}
+        self._emails: dict[EmailKey, Email] = {}
+        self._online_accounts: dict[OnlineAccountKey, OnlineAccount] = {}
+        self._registered_on_edges: dict[RegisteredOnEdgeKey, tuple[Email, OnlineAccount]] = {}
+
+        # Maps a normalized (first_name, last_name) to the PersonKey of the "original" Person
+        # node for a --first-name/--last-name entrypoint, so load_pappers can alias-match
+        # directors onto it by name alone instead of creating a second, birth-date-qualified
+        # Person node.
+        self._original_person_name_keys: dict[tuple[str, str], PersonKey] = {}
+
+    def add_original_person(self, first_name: str, last_name: str) -> None:
+        """
+        Registers the CLI entrypoint's own Person node, regardless of scraper results.
+
+        Must be called before load_pappers() for this name — load_pappers consults the
+        registered name key while building each director's key, so any director processed
+        before this call is keyed normally and will not be retroactively merged.
+        """
+        fn_key, ln_key = _norm(first_name), _norm(last_name)
+        person_key: PersonKey = (fn_key, ln_key, None)
+        if person_key not in self._persons:
+            self._persons[person_key] = Person(first_name, last_name)
+        self._original_person_name_keys[(fn_key, ln_key)] = person_key
+
+    def add_original_email(self, email: str) -> None:
+        """Registers the CLI entrypoint's own Email node, regardless of scraper results."""
+        email_key = _norm(email)
+        if email_key not in self._emails:
+            self._emails[email_key] = Email(email)
+
+    def load_holehe(self, email: str, results: list[OnlineAccount]) -> None:
+        email_key = _norm(email)
+        if email_key not in self._emails:
+            self._emails[email_key] = Email(email)
+
+        for account in results:
+            acct_key: OnlineAccountKey = (_norm(account.site), _norm(account.domain))
+            if acct_key not in self._online_accounts:
+                self._online_accounts[acct_key] = account
+            self._registered_on_edges[(email_key, acct_key)] = (
+                self._emails[email_key], self._online_accounts[acct_key],
+            )
 
     def load_pappers(self, results: list[PapperResultSociety]) -> None:
         for company in results:
@@ -58,9 +103,20 @@ class GossipGraph:
 
             for director in company.directors:
                 p = director.person
-                person_key: PersonKey = (_norm(p.first_name), _norm(p.last_name), _norm(p.birth_date))
-                if person_key not in self._persons:
-                    self._persons[person_key] = p
+                name_key = (_norm(p.first_name), _norm(p.last_name))
+
+                if name_key in self._original_person_name_keys:
+                    person_key = self._original_person_name_keys[name_key]
+                    original = self._persons[person_key]
+                    # Enrich in place so edges already referencing this Person object
+                    # (from earlier load_pappers calls) see the birth date too.
+                    if p.birth_date and not original.birth_date:
+                        original.birth_date = p.birth_date
+                else:
+                    person_key = (_norm(p.first_name), _norm(p.last_name), _norm(p.birth_date))
+                    if person_key not in self._persons:
+                        self._persons[person_key] = p
+
                 self._director_edges[(person_key, siret_key)] = (self._persons[person_key], company, director)
                 if is_probable_home:
                     self._probable_home_edges[(addr_key, person_key)] = (
@@ -118,6 +174,32 @@ class GossipGraph:
                 f'ON CREATE SET ' + ", ".join(sets) + ";"
             )
 
+        lines.append("\n// Email nodes")
+        for email_key, email in self._emails.items():
+            sets = [f'e.address = "{_esc(email.address)}"']
+            if email.source:
+                sets.append(f'e.source = "{_esc(email.source)}"')
+            if email.source_url:
+                sets.append(f'e.source_url = "{_esc(email.source_url)}"')
+            lines.append(
+                f'MERGE (e:Email {{address_key: "{_esc(email_key)}"}}) '
+                f'ON CREATE SET ' + ", ".join(sets) + ";"
+            )
+
+        lines.append("\n// OnlineAccount nodes")
+        for (site_key, domain_key), account in self._online_accounts.items():
+            sets = [f'oa.site = "{_esc(account.site)}"', f'oa.domain = "{_esc(account.domain)}"']
+            if account.method:
+                sets.append(f'oa.method = "{_esc(account.method)}"')
+            if account.source:
+                sets.append(f'oa.source = "{_esc(account.source)}"')
+            if account.source_url:
+                sets.append(f'oa.source_url = "{_esc(account.source_url)}"')
+            lines.append(
+                f'MERGE (oa:OnlineAccount {{site_key: "{_esc(site_key)}", domain_key: "{_esc(domain_key)}"}}) '
+                f'ON CREATE SET ' + ", ".join(sets) + ";"
+            )
+
         lines.append("\n// HAS_ADDRESS edges")
         for (siret_key, addr_key), (company, address) in self._address_edges.items():
             street_key, city_key, postal_key = addr_key
@@ -144,6 +226,15 @@ class GossipGraph:
                 f'MATCH (a:Address {{street_key: "{_esc(street_key)}", city_key: "{_esc(city_key)}", postal_code_key: "{_esc(postal_key)}"}})\n'
                 f'MATCH (p:Person {{first_name_key: "{_esc(fn_key)}", last_name_key: "{_esc(ln_key)}", birth_date_key: {_cypher_str(bd_key)}}})\n'
                 f'MERGE (a)-[:PROBABLE_HOME]->(p);'
+            )
+
+        lines.append("\n// REGISTERED_ON edges")
+        for (email_key, acct_key), (email, account) in self._registered_on_edges.items():
+            site_key, domain_key = acct_key
+            lines.append(
+                f'MATCH (e:Email {{address_key: "{_esc(email_key)}"}})\n'
+                f'MATCH (oa:OnlineAccount {{site_key: "{_esc(site_key)}", domain_key: "{_esc(domain_key)}"}})\n'
+                f'MERGE (e)-[:REGISTERED_ON]->(oa);'
             )
 
         with open(path, "w", encoding="utf-8") as f:
@@ -216,6 +307,38 @@ class GossipGraph:
                 "source_url": company.link,
             })
 
+        for email_key, email in self._emails.items():
+            nodes.append({
+                "id": f"email:{email_key}",
+                "type": "Email",
+                "label": email.address,
+                "properties": {"Address": email.address},
+                "key": {"address_key": email_key},
+                "merge_props": {"address": email.address},
+                "source": email.source,
+                "source_url": email.source_url,
+            })
+
+        for (site_key, domain_key), account in self._online_accounts.items():
+            nodes.append({
+                "id": f"account:{site_key}:{domain_key}",
+                "type": "OnlineAccount",
+                "label": account.site,
+                "properties": {
+                    "Site": account.site,
+                    "Domain": account.domain,
+                    "Method": account.method,
+                },
+                "key": {"site_key": site_key, "domain_key": domain_key},
+                "merge_props": {
+                    "site": account.site,
+                    "domain": account.domain,
+                    **({"method": account.method} if account.method else {}),
+                },
+                "source": account.source,
+                "source_url": account.source_url,
+            })
+
         edge_id = 0
         for (siret_key, addr_key), (company, address) in self._address_edges.items():
             street_key, city_key, postal_key = addr_key
@@ -250,6 +373,18 @@ class GossipGraph:
                 "to": f"person:{fn_key}:{ln_key}:{bd_key}",
                 "type": "PROBABLE_HOME",
                 "label": "PROBABLE_HOME",
+                "properties": {},
+            })
+            edge_id += 1
+
+        for (email_key, acct_key), (email, account) in self._registered_on_edges.items():
+            site_key, domain_key = acct_key
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"email:{email_key}",
+                "to": f"account:{site_key}:{domain_key}",
+                "type": "REGISTERED_ON",
+                "label": "REGISTERED_ON",
                 "properties": {},
             })
             edge_id += 1
