@@ -21,6 +21,18 @@ def _random_wait(min_s: float = 1.5, max_s: float = 4.0) -> None:
     time.sleep(random.uniform(min_s, max_s))
 
 
+def _is_captcha_page(driver) -> bool:
+    """Distinguishes an actual CAPTCHA/anti-bot challenge from a legitimate zero-result
+    search — both leave the page without any 'container-resultat' element, so a plain
+    timeout can't tell them apart."""
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
+    except NoSuchElementException:
+        return False
+    captcha_markers = ("captcha", "vérifiez que vous êtes humain", "robot")
+    return any(marker in body_text for marker in captcha_markers)
+
+
 def _collect_page_links(driver) -> list[str | None]:
     result_div = WebDriverWait(driver, 10).until(
         EC.presence_of_all_elements_located((By.CLASS_NAME, "container-resultat"))
@@ -103,8 +115,12 @@ def lookup(first_name: str, last_name: str) -> List[PapperResultSociety]:
         try:
             links.extend(_collect_page_links(driver))
         except TimeoutException:
-            driver.quit()
-            raise CaptchaError("Search results did not load — Pappers may have triggered a CAPTCHA")
+            if _is_captcha_page(driver):
+                driver.quit()
+                raise CaptchaError("Search results did not load — Pappers may have triggered a CAPTCHA")
+            # No 'container-resultat' elements and no CAPTCHA markers — Pappers simply
+            # found no companies for this person, not an error.
+            break
 
         if not _has_next_page(driver):
             break
