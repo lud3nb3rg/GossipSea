@@ -9,7 +9,7 @@ A OSINT pipeline specialized on gathering information on individuals. Basically 
 Centered on French people, as there aren't that much non US centered tools out there.
 ## Roadmap
 
-- [] Manage entry points (email, phone, username, domain, IP)
+- [] Manage entry points (email, phone, username, date of birth)
 - [] Add tools (Holehe, Phoneinfoga, Sherlock, Maigret, Pappers)
 - [] Production of a graph result
 

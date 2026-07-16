@@ -1,4 +1,4 @@
-from nodes import Person, Address, Director, Email, OnlineAccount
+from nodes import Person, Address, Director, Email, OnlineAccount, PhoneNumber, Username
 from pappers_scrapper import PapperResultSociety, PersonKey
 
 AddressKey = tuple[str, str, str]                # normalized (street, city, postal_code)
@@ -8,6 +8,12 @@ ProbableHomeEdgeKey = tuple[AddressKey, PersonKey]
 EmailKey = str                                   # normalized email address
 OnlineAccountKey = tuple[str, str]               # normalized (site, domain)
 RegisteredOnEdgeKey = tuple[EmailKey, OnlineAccountKey]
+PhoneKey = str                                   # normalized phone number
+PersonPhoneEdgeKey = tuple[PersonKey, PhoneKey]
+UsernameKey = str                                # normalized username
+PersonUsernameEdgeKey = tuple[PersonKey, UsernameKey]
+UsernameEmailEdgeKey = tuple[UsernameKey, EmailKey]
+UsernameAccountEdgeKey = tuple[UsernameKey, OnlineAccountKey]
 
 # Legal forms (normalized) under which a company's registered address is treated as the
 # director's probable home address, rather than a business premises.
@@ -46,6 +52,15 @@ class GossipGraph:
         self._online_accounts: dict[OnlineAccountKey, OnlineAccount] = {}
         self._registered_on_edges: dict[RegisteredOnEdgeKey, tuple[Email, OnlineAccount]] = {}
         self._person_email_edges: dict[tuple[PersonKey, EmailKey], tuple[Person, Email]] = {}
+        self._phones: dict[PhoneKey, PhoneNumber] = {}
+        self._person_phone_edges: dict[PersonPhoneEdgeKey, tuple[Person, PhoneNumber]] = {}
+        self._usernames: dict[UsernameKey, Username] = {}
+        # Provided-by-user usernames (USERNAME edge) vs. guessed from name/DOB (EXTRAPOLATED_USERNAME edge)
+        self._person_username_edges: dict[PersonUsernameEdgeKey, tuple[Person, Username]] = {}
+        self._person_extrapolated_username_edges: dict[PersonUsernameEdgeKey, tuple[Person, Username]] = {}
+        # Emails guessed from a username on a common domain (EXTRAPOLATED_EMAIL edge), not from the Person directly
+        self._username_extrapolated_email_edges: dict[UsernameEmailEdgeKey, tuple[Username, Email]] = {}
+        self._username_registered_on_edges: dict[UsernameAccountEdgeKey, tuple[Username, OnlineAccount]] = {}
 
         # Maps a normalized (first_name, last_name) to the PersonKey of the "original" Person
         # node for a --first-name/--last-name entrypoint, so load_pappers can alias-match
@@ -53,19 +68,37 @@ class GossipGraph:
         # Person node.
         self._original_person_name_keys: dict[tuple[str, str], PersonKey] = {}
 
-        # Track the single original Person/Email entrypoint (if given), so that once both are
-        # present we can link them regardless of which one was registered first.
+        # Track the original Person entrypoint and Email entrypoint(s) (if given), so that
+        # once both are present we can link them regardless of which was registered first.
         self._original_person_key: PersonKey | None = None
-        self._original_email_key: EmailKey | None = None
+        self._original_email_keys: set[EmailKey] = set()
+        self._original_phone_key: PhoneKey | None = None
+        self._original_username_keys: set[UsernameKey] = set()
 
     def _link_original_person_and_email(self) -> None:
-        if self._original_person_key is None or self._original_email_key is None:
+        if self._original_person_key is None:
             return
         person = self._persons[self._original_person_key]
-        email = self._emails[self._original_email_key]
-        self._person_email_edges[(self._original_person_key, self._original_email_key)] = (person, email)
+        for email_key in self._original_email_keys:
+            email = self._emails[email_key]
+            self._person_email_edges[(self._original_person_key, email_key)] = (person, email)
 
-    def add_original_person(self, first_name: str, last_name: str) -> None:
+    def _link_original_person_and_phone(self) -> None:
+        if self._original_person_key is None or self._original_phone_key is None:
+            return
+        person = self._persons[self._original_person_key]
+        phone = self._phones[self._original_phone_key]
+        self._person_phone_edges[(self._original_person_key, self._original_phone_key)] = (person, phone)
+
+    def _link_original_person_and_username(self) -> None:
+        if self._original_person_key is None:
+            return
+        person = self._persons[self._original_person_key]
+        for username_key in self._original_username_keys:
+            username = self._usernames[username_key]
+            self._person_username_edges[(self._original_person_key, username_key)] = (person, username)
+
+    def add_original_person(self, first_name: str, last_name: str, birth_date: str | None = None) -> None:
         """
         Registers the CLI entrypoint's own Person node, regardless of scraper results.
 
@@ -76,18 +109,80 @@ class GossipGraph:
         fn_key, ln_key = _norm(first_name), _norm(last_name)
         person_key: PersonKey = (fn_key, ln_key, None)
         if person_key not in self._persons:
-            self._persons[person_key] = Person(first_name, last_name, source="Provided by user")
+            self._persons[person_key] = Person(first_name, last_name, birth_date=birth_date, source="Provided by user")
+        elif birth_date and not self._persons[person_key].birth_date:
+            self._persons[person_key].birth_date = birth_date
         self._original_person_name_keys[(fn_key, ln_key)] = person_key
         self._original_person_key = person_key
         self._link_original_person_and_email()
+        self._link_original_person_and_phone()
+        self._link_original_person_and_username()
 
     def add_original_email(self, email: str) -> None:
         """Registers the CLI entrypoint's own Email node, regardless of scraper results."""
         email_key = _norm(email)
         if email_key not in self._emails:
             self._emails[email_key] = Email(email, source="Provided by user")
-        self._original_email_key = email_key
+        self._original_email_keys.add(email_key)
         self._link_original_person_and_email()
+
+    def add_original_phone(self, phone: str) -> None:
+        """Registers the CLI entrypoint's own PhoneNumber node, regardless of scraper results."""
+        phone_key = _norm(phone)
+        if phone_key not in self._phones:
+            self._phones[phone_key] = PhoneNumber(phone, source="Provided by user")
+        self._original_phone_key = phone_key
+        self._link_original_person_and_phone()
+
+    def add_original_username(self, username: str) -> None:
+        """Registers the CLI entrypoint's own Username node (user-provided, not extrapolated)."""
+        username_key = _norm(username)
+        if username_key not in self._usernames:
+            self._usernames[username_key] = Username(username, source="Provided by user")
+        self._original_username_keys.add(username_key)
+        self._link_original_person_and_username()
+
+    def add_extrapolated_username(self, username: str) -> None:
+        """
+        Registers a Username node guessed from the original person's name/DOB (not
+        provided by the user), linked via EXTRAPOLATED_USERNAME rather than USERNAME.
+        No-op if there is no original Person yet to link it to.
+        """
+        if self._original_person_key is None:
+            return
+        username_key = _norm(username)
+        if username_key not in self._usernames:
+            self._usernames[username_key] = Username(username, source="Extrapolated")
+        person = self._persons[self._original_person_key]
+        self._person_extrapolated_username_edges[(self._original_person_key, username_key)] = (
+            person, self._usernames[username_key],
+        )
+
+    def add_extrapolated_email(self, username: str, email: str) -> None:
+        """
+        Registers an Email node guessed from a username on a common domain, linked to
+        that Username via EXTRAPOLATED_EMAIL rather than the Person-level EMAIL edge —
+        the email's provenance is the username, not the person directly.
+        """
+        username_key = _norm(username)
+        if username_key not in self._usernames:
+            self._usernames[username_key] = Username(username, source="Extrapolated")
+        email_key = _norm(email)
+        if email_key not in self._emails:
+            self._emails[email_key] = Email(email, source="Extrapolated")
+        self._username_extrapolated_email_edges[(username_key, email_key)] = (
+            self._usernames[username_key], self._emails[email_key],
+        )
+
+    def load_phoneinfoga(self, phone: str, result: PhoneNumber) -> None:
+        """Enriches the phone entrypoint's node in place with Phoneinfoga's scan result."""
+        phone_key = _norm(phone)
+        if phone_key not in self._phones:
+            self._phones[phone_key] = result
+            return
+        existing = self._phones[phone_key]
+        existing.country = result.country
+        existing.carrier = result.carrier
 
     def load_holehe(self, email: str, results: list[OnlineAccount]) -> None:
         email_key = _norm(email)
@@ -100,6 +195,25 @@ class GossipGraph:
                 self._online_accounts[acct_key] = account
             self._registered_on_edges[(email_key, acct_key)] = (
                 self._emails[email_key], self._online_accounts[acct_key],
+            )
+
+    def load_sherlock(self, username: str, results: list[OnlineAccount]) -> None:
+        self._load_username_accounts(username, results)
+
+    def load_maigret(self, username: str, results: list[OnlineAccount]) -> None:
+        self._load_username_accounts(username, results)
+
+    def _load_username_accounts(self, username: str, results: list[OnlineAccount]) -> None:
+        username_key = _norm(username)
+        if username_key not in self._usernames:
+            self._usernames[username_key] = Username(username)
+
+        for account in results:
+            acct_key: OnlineAccountKey = (_norm(account.site), _norm(account.domain))
+            if acct_key not in self._online_accounts:
+                self._online_accounts[acct_key] = account
+            self._username_registered_on_edges[(username_key, acct_key)] = (
+                self._usernames[username_key], self._online_accounts[acct_key],
             )
 
     def load_pappers(self, results: list[PapperResultSociety]) -> None:
@@ -217,6 +331,34 @@ class GossipGraph:
                 f'ON CREATE SET ' + ", ".join(sets) + ";"
             )
 
+        lines.append("\n// PhoneNumber nodes")
+        for phone_key, phone in self._phones.items():
+            sets = [f'ph.number = "{_esc(phone.number)}"']
+            if phone.country:
+                sets.append(f'ph.country = "{_esc(phone.country)}"')
+            if phone.carrier:
+                sets.append(f'ph.carrier = "{_esc(phone.carrier)}"')
+            if phone.source:
+                sets.append(f'ph.source = "{_esc(phone.source)}"')
+            if phone.source_url:
+                sets.append(f'ph.source_url = "{_esc(phone.source_url)}"')
+            lines.append(
+                f'MERGE (ph:PhoneNumber {{number_key: "{_esc(phone_key)}"}}) '
+                f'ON CREATE SET ' + ", ".join(sets) + ";"
+            )
+
+        lines.append("\n// Username nodes")
+        for username_key, username in self._usernames.items():
+            sets = [f'u.value = "{_esc(username.value)}"']
+            if username.source:
+                sets.append(f'u.source = "{_esc(username.source)}"')
+            if username.source_url:
+                sets.append(f'u.source_url = "{_esc(username.source_url)}"')
+            lines.append(
+                f'MERGE (u:Username {{value_key: "{_esc(username_key)}"}}) '
+                f'ON CREATE SET ' + ", ".join(sets) + ";"
+            )
+
         lines.append("\n// HAS_ADDRESS edges")
         for (siret_key, addr_key), (company, address) in self._address_edges.items():
             street_key, city_key, postal_key = addr_key
@@ -254,6 +396,15 @@ class GossipGraph:
                 f'MERGE (p)-[:EMAIL]->(e);'
             )
 
+        lines.append("\n// PHONE edges")
+        for (person_key, phone_key), (person, phone) in self._person_phone_edges.items():
+            fn_key, ln_key, bd_key = person_key
+            lines.append(
+                f'MATCH (p:Person {{first_name_key: "{_esc(fn_key)}", last_name_key: "{_esc(ln_key)}", birth_date_key: {_cypher_str(bd_key)}}})\n'
+                f'MATCH (ph:PhoneNumber {{number_key: "{_esc(phone_key)}"}})\n'
+                f'MERGE (p)-[:PHONE]->(ph);'
+            )
+
         lines.append("\n// REGISTERED_ON edges")
         for (email_key, acct_key), (email, account) in self._registered_on_edges.items():
             site_key, domain_key = acct_key
@@ -261,6 +412,41 @@ class GossipGraph:
                 f'MATCH (e:Email {{address_key: "{_esc(email_key)}"}})\n'
                 f'MATCH (oa:OnlineAccount {{site_key: "{_esc(site_key)}", domain_key: "{_esc(domain_key)}"}})\n'
                 f'MERGE (e)-[:REGISTERED_ON]->(oa);'
+            )
+
+        lines.append("\n// USERNAME edges")
+        for (person_key, username_key), (person, username) in self._person_username_edges.items():
+            fn_key, ln_key, bd_key = person_key
+            lines.append(
+                f'MATCH (p:Person {{first_name_key: "{_esc(fn_key)}", last_name_key: "{_esc(ln_key)}", birth_date_key: {_cypher_str(bd_key)}}})\n'
+                f'MATCH (u:Username {{value_key: "{_esc(username_key)}"}})\n'
+                f'MERGE (p)-[:USERNAME]->(u);'
+            )
+
+        lines.append("\n// EXTRAPOLATED_USERNAME edges")
+        for (person_key, username_key), (person, username) in self._person_extrapolated_username_edges.items():
+            fn_key, ln_key, bd_key = person_key
+            lines.append(
+                f'MATCH (p:Person {{first_name_key: "{_esc(fn_key)}", last_name_key: "{_esc(ln_key)}", birth_date_key: {_cypher_str(bd_key)}}})\n'
+                f'MATCH (u:Username {{value_key: "{_esc(username_key)}"}})\n'
+                f'MERGE (p)-[:EXTRAPOLATED_USERNAME]->(u);'
+            )
+
+        lines.append("\n// EXTRAPOLATED_EMAIL edges")
+        for (username_key, email_key), (username, email) in self._username_extrapolated_email_edges.items():
+            lines.append(
+                f'MATCH (u:Username {{value_key: "{_esc(username_key)}"}})\n'
+                f'MATCH (e:Email {{address_key: "{_esc(email_key)}"}})\n'
+                f'MERGE (u)-[:EXTRAPOLATED_EMAIL]->(e);'
+            )
+
+        lines.append("\n// REGISTERED_ON edges (from Username)")
+        for (username_key, acct_key), (username, account) in self._username_registered_on_edges.items():
+            site_key, domain_key = acct_key
+            lines.append(
+                f'MATCH (u:Username {{value_key: "{_esc(username_key)}"}})\n'
+                f'MATCH (oa:OnlineAccount {{site_key: "{_esc(site_key)}", domain_key: "{_esc(domain_key)}"}})\n'
+                f'MERGE (u)-[:REGISTERED_ON]->(oa);'
             )
 
         with open(path, "w", encoding="utf-8") as f:
@@ -365,6 +551,38 @@ class GossipGraph:
                 "source_url": account.source_url,
             })
 
+        for phone_key, phone in self._phones.items():
+            nodes.append({
+                "id": f"phone:{phone_key}",
+                "type": "PhoneNumber",
+                "label": phone.number,
+                "properties": {
+                    "Number": phone.number,
+                    "Country": phone.country,
+                    "Carrier": phone.carrier,
+                },
+                "key": {"number_key": phone_key},
+                "merge_props": {
+                    "number": phone.number,
+                    **({"country": phone.country} if phone.country else {}),
+                    **({"carrier": phone.carrier} if phone.carrier else {}),
+                },
+                "source": phone.source,
+                "source_url": phone.source_url,
+            })
+
+        for username_key, username in self._usernames.items():
+            nodes.append({
+                "id": f"username:{username_key}",
+                "type": "Username",
+                "label": username.value,
+                "properties": {"Value": username.value},
+                "key": {"value_key": username_key},
+                "merge_props": {"value": username.value},
+                "source": username.source,
+                "source_url": username.source_url,
+            })
+
         edge_id = 0
         for (siret_key, addr_key), (company, address) in self._address_edges.items():
             street_key, city_key, postal_key = addr_key
@@ -423,6 +641,65 @@ class GossipGraph:
                 "to": f"email:{email_key}",
                 "type": "EMAIL",
                 "label": "EMAIL",
+                "properties": {},
+            })
+            edge_id += 1
+
+        for (person_key, phone_key), (person, phone) in self._person_phone_edges.items():
+            fn_key, ln_key, bd_key = person_key
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"person:{fn_key}:{ln_key}:{bd_key}",
+                "to": f"phone:{phone_key}",
+                "type": "PHONE",
+                "label": "PHONE",
+                "properties": {},
+            })
+            edge_id += 1
+
+        for (person_key, username_key), (person, username) in self._person_username_edges.items():
+            fn_key, ln_key, bd_key = person_key
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"person:{fn_key}:{ln_key}:{bd_key}",
+                "to": f"username:{username_key}",
+                "type": "USERNAME",
+                "label": "USERNAME",
+                "properties": {},
+            })
+            edge_id += 1
+
+        for (person_key, username_key), (person, username) in self._person_extrapolated_username_edges.items():
+            fn_key, ln_key, bd_key = person_key
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"person:{fn_key}:{ln_key}:{bd_key}",
+                "to": f"username:{username_key}",
+                "type": "EXTRAPOLATED_USERNAME",
+                "label": "EXTRAPOLATED_USERNAME",
+                "properties": {},
+            })
+            edge_id += 1
+
+        for (username_key, email_key), (username, email) in self._username_extrapolated_email_edges.items():
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"username:{username_key}",
+                "to": f"email:{email_key}",
+                "type": "EXTRAPOLATED_EMAIL",
+                "label": "EXTRAPOLATED_EMAIL",
+                "properties": {},
+            })
+            edge_id += 1
+
+        for (username_key, acct_key), (username, account) in self._username_registered_on_edges.items():
+            site_key, domain_key = acct_key
+            edges.append({
+                "id": f"e{edge_id}",
+                "from": f"username:{username_key}",
+                "to": f"account:{site_key}:{domain_key}",
+                "type": "REGISTERED_ON",
+                "label": "REGISTERED_ON",
                 "properties": {},
             })
             edge_id += 1

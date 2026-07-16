@@ -2,7 +2,7 @@ import json
 
 import graph_html
 from graph import GossipGraph
-from nodes import Address, Director, OnlineAccount, Person
+from nodes import Address, Director, OnlineAccount, Person, PhoneNumber
 from pappers_scrapper import PapperResultSociety
 
 
@@ -231,6 +231,145 @@ def test_load_holehe_creates_email_node_even_without_add_original_email():
 
     data = graph.to_graph_data()
     assert any(n["type"] == "Email" for n in data["nodes"])
+
+
+def test_original_person_and_phone_have_provided_by_user_source_and_are_linked():
+    graph = GossipGraph()
+    graph.add_original_person("Jean", "Dupont")
+    graph.add_original_phone("+33612345678")
+
+    data = graph.to_graph_data()
+    person_node = next(n for n in data["nodes"] if n["type"] == "Person")
+    phone_node = next(n for n in data["nodes"] if n["type"] == "PhoneNumber")
+    assert person_node["source"] == "Provided by user"
+    assert phone_node["source"] == "Provided by user"
+
+    phone_edges = [e for e in data["edges"] if e["type"] == "PHONE"]
+    assert len(phone_edges) == 1
+    assert phone_edges[0]["from"] == person_node["id"]
+    assert phone_edges[0]["to"] == phone_node["id"]
+
+
+def test_original_person_and_phone_link_regardless_of_call_order():
+    graph = GossipGraph()
+    graph.add_original_phone("+33612345678")
+    graph.add_original_person("Jean", "Dupont")
+
+    data = graph.to_graph_data()
+    phone_edges = [e for e in data["edges"] if e["type"] == "PHONE"]
+    assert len(phone_edges) == 1
+
+
+def test_load_phoneinfoga_enriches_original_phone_node_in_place():
+    graph = GossipGraph()
+    graph.add_original_phone("+33612345678")
+    result = PhoneNumber("+33612345678", country="France", carrier="Orange", source="Phoneinfoga")
+    graph.load_phoneinfoga("+33612345678", result)
+
+    data = graph.to_graph_data()
+    phone_nodes = [n for n in data["nodes"] if n["type"] == "PhoneNumber"]
+    assert len(phone_nodes) == 1
+    assert phone_nodes[0]["properties"]["Country"] == "France"
+    assert phone_nodes[0]["properties"]["Carrier"] == "Orange"
+    # Enrichment doesn't override the "Provided by user" identity source.
+    assert phone_nodes[0]["source"] == "Provided by user"
+
+
+def test_original_person_and_username_have_provided_by_user_source_and_are_linked():
+    graph = GossipGraph()
+    graph.add_original_person("Jean", "Dupont")
+    graph.add_original_username("jdupont")
+
+    data = graph.to_graph_data()
+    person_node = next(n for n in data["nodes"] if n["type"] == "Person")
+    username_node = next(n for n in data["nodes"] if n["type"] == "Username")
+    assert person_node["source"] == "Provided by user"
+    assert username_node["source"] == "Provided by user"
+
+    username_edges = [e for e in data["edges"] if e["type"] == "USERNAME"]
+    assert len(username_edges) == 1
+    assert username_edges[0]["from"] == person_node["id"]
+    assert username_edges[0]["to"] == username_node["id"]
+
+
+def test_original_person_and_username_link_regardless_of_call_order():
+    graph = GossipGraph()
+    graph.add_original_username("jdupont")
+    graph.add_original_person("Jean", "Dupont")
+
+    data = graph.to_graph_data()
+    username_edges = [e for e in data["edges"] if e["type"] == "USERNAME"]
+    assert len(username_edges) == 1
+
+
+def test_add_extrapolated_username_creates_extrapolated_edge_not_username_edge():
+    graph = GossipGraph()
+    graph.add_original_person("Jean", "Dupont")
+    graph.add_extrapolated_username("jeandupont1990")
+
+    data = graph.to_graph_data()
+    person_node = next(n for n in data["nodes"] if n["type"] == "Person")
+    username_node = next(n for n in data["nodes"] if n["type"] == "Username")
+    assert username_node["source"] == "Extrapolated"
+
+    assert not any(e["type"] == "USERNAME" for e in data["edges"])
+    extrapolated_edges = [e for e in data["edges"] if e["type"] == "EXTRAPOLATED_USERNAME"]
+    assert len(extrapolated_edges) == 1
+    assert extrapolated_edges[0]["from"] == person_node["id"]
+    assert extrapolated_edges[0]["to"] == username_node["id"]
+
+
+def test_add_extrapolated_username_without_original_person_is_a_noop():
+    graph = GossipGraph()
+    graph.add_extrapolated_username("jeandupont1990")
+
+    data = graph.to_graph_data()
+    assert data["nodes"] == []
+    assert data["edges"] == []
+
+
+def test_add_extrapolated_email_links_from_username_not_person():
+    graph = GossipGraph()
+    graph.add_extrapolated_email("jdupont", "jdupont@gmail.com")
+
+    data = graph.to_graph_data()
+    username_node = next(n for n in data["nodes"] if n["type"] == "Username")
+    email_node = next(n for n in data["nodes"] if n["type"] == "Email")
+    assert username_node["source"] == "Extrapolated"
+    assert email_node["source"] == "Extrapolated"
+
+    assert not any(e["type"] == "EMAIL" for e in data["edges"])
+    extrapolated_edges = [e for e in data["edges"] if e["type"] == "EXTRAPOLATED_EMAIL"]
+    assert len(extrapolated_edges) == 1
+    assert extrapolated_edges[0]["from"] == username_node["id"]
+    assert extrapolated_edges[0]["to"] == email_node["id"]
+
+
+def test_load_sherlock_creates_username_and_account_nodes_with_edge():
+    graph = GossipGraph()
+    graph.add_original_username("jdupont")
+    account = OnlineAccount(site="GitHub", domain="github.com", method="username_search", source="Sherlock")
+    graph.load_sherlock("jdupont", [account])
+
+    data = graph.to_graph_data()
+    username_nodes = [n for n in data["nodes"] if n["type"] == "Username"]
+    account_nodes = [n for n in data["nodes"] if n["type"] == "OnlineAccount"]
+    reg_edges = [e for e in data["edges"] if e["type"] == "REGISTERED_ON"]
+
+    assert len(username_nodes) == 1
+    assert len(account_nodes) == 1
+    assert len(reg_edges) == 1
+    assert reg_edges[0]["from"] == username_nodes[0]["id"]
+    assert reg_edges[0]["to"] == account_nodes[0]["id"]
+
+
+def test_load_maigret_creates_username_node_even_without_add_original_username():
+    graph = GossipGraph()
+    account = OnlineAccount(site="GitHub", domain="github.com", source="Maigret")
+    graph.load_maigret("jdupont", [account])
+
+    data = graph.to_graph_data()
+    assert any(n["type"] == "Username" for n in data["nodes"])
 
 
 def test_render_html_embeds_valid_graph_data():

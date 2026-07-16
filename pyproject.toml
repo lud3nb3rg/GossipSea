@@ -7,6 +7,9 @@ requires-python = ">=3.13"
 dependencies = [
     "selenium>=4.46.0",
     "holehe",
+    "httpx",
+    "sherlock-project",
+    "maigret",
 ]
 
 [dependency-groups]

@@ -28,11 +28,26 @@ class Email:
         self.source = source
         self.source_url = source_url
 
+class Username:
+    def __init__(self, value: str, source: str|None = None, source_url: str|None = None):
+        self.value = value
+        self.source = source
+        self.source_url = source_url
+
 class OnlineAccount:
     def __init__(self, site: str, domain: str, method: str|None = None,
                  source: str|None = None, source_url: str|None = None):
         self.site = site
         self.domain = domain
         self.method = method
+        self.source = source
+        self.source_url = source_url
+
+class PhoneNumber:
+    def __init__(self, number: str, country: str|None = None, carrier: str|None = None,
+                 source: str|None = None, source_url: str|None = None):
+        self.number = number
+        self.country = country
+        self.carrier = carrier
         self.source = source
         self.source_url = source_url
