@@ -12,11 +12,13 @@ class PhoneinfogaError(Exception):
     """Raised when the Phoneinfoga REST API is unreachable or returns an error."""
 
 
-def lookup(phone: str, base_url: str = DEFAULT_BASE_URL) -> PhoneNumber:
+def lookup(phone: str, base_url: str = DEFAULT_BASE_URL) -> list[PhoneNumber]:
     """
-    Registers `phone` with a running `phoneinfoga serve` instance and returns a PhoneNumber
-    populated from its "local" scanner (always-on, no API key required): country and carrier
-    as statically parsed from the number itself.
+    Registers `phone` with a running `phoneinfoga serve` instance and returns a
+    single-item list containing a PhoneNumber populated from its "local" scanner
+    (always-on, no API key required): country and carrier as statically parsed from
+    the number itself. Returns a list, like every other scraper's lookup(), even
+    though there's only ever one result on success; raises PhoneinfogaError on failure.
     """
     try:
         with httpx.Client(base_url=base_url, timeout=30.0) as client:
@@ -27,9 +29,9 @@ def lookup(phone: str, base_url: str = DEFAULT_BASE_URL) -> PhoneNumber:
         raise PhoneinfogaError(f"Phoneinfoga request failed: {e}") from e
 
     local = response.json().get("local", {})
-    return PhoneNumber(
+    return [PhoneNumber(
         phone,
         country=local.get("country"),
         carrier=local.get("carrier"),
         source="Phoneinfoga",
-    )
+    )]

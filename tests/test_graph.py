@@ -3,20 +3,20 @@ import json
 import graph_html
 from graph import GossipGraph
 from nodes import Address, Director, OnlineAccount, Person, PhoneNumber
-from pappers_scrapper import PapperResultSociety
+from recherche_entreprises_scraper import Company
 
 
-def _sample_results() -> list[PapperResultSociety]:
-    address = Address("1 Rue de la Paix", "Paris", "75002", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
+def _sample_results() -> list[Company]:
+    address = Address("1 Rue de la Paix", "Paris", "75002", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
     person = Person("Jean", "Dupont", birth_date="1980-05", birth_place="Paris",
-                     source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
+                     source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
     director = Director(person, "Président", "01/01/2020")
-    company = PapperResultSociety(
+    company = Company(
         name="ACME SARL",
         address=address,
         siret="12345678900012",
         creation_date="01/01/2020",
-        link="https://www.pappers.fr/entreprise/1",
+        link="https://annuaire-entreprises.data.gouv.fr/entreprise/1",
         directors=[director],
         legal_form="SARL",
     )
@@ -25,7 +25,7 @@ def _sample_results() -> list[PapperResultSociety]:
 
 def test_to_graph_data_is_json_serializable_and_consistent():
     graph = GossipGraph()
-    graph.load_pappers(_sample_results())
+    graph.load_recherche_entreprises(_sample_results())
 
     data = graph.to_graph_data()
     json.dumps(data)  # must not raise
@@ -39,15 +39,15 @@ def test_to_graph_data_is_json_serializable_and_consistent():
         assert edge["to"] in node_ids
 
     person_node = next(n for n in data["nodes"] if n["type"] == "Person")
-    assert person_node["source"] == "Pappers"
-    assert person_node["source_url"] == "https://www.pappers.fr/entreprise/1"
+    assert person_node["source"] == "Recherche d'entreprises"
+    assert person_node["source_url"] == "https://annuaire-entreprises.data.gouv.fr/entreprise/1"
     assert person_node["key"] == {"first_name_key": "jean", "last_name_key": "dupont", "birth_date_key": "1980-05"}
     assert person_node["merge_props"] == {
         "first_name": "Jean", "last_name": "Dupont", "birth_date": "1980-05", "birth_place": "Paris",
     }
 
     address_node = next(n for n in data["nodes"] if n["type"] == "Address")
-    assert address_node["source"] == "Pappers"
+    assert address_node["source"] == "Recherche d'entreprises"
     assert address_node["key"] == {
         "street_key": "1 rue de la paix", "city_key": "paris", "postal_code_key": "75002",
     }
@@ -65,19 +65,19 @@ def test_to_graph_data_is_json_serializable_and_consistent():
 
 
 def test_addresses_merge_case_insensitively_on_street_city_and_postal_code():
-    address_a = Address("1 Rue de la Paix", "Paris", "75002", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
-    address_b = Address("1 RUE DE LA PAIX", "PARIS", "75002", source="Pappers", source_url="https://www.pappers.fr/entreprise/2")
-    company_a = PapperResultSociety(
+    address_a = Address("1 Rue de la Paix", "Paris", "75002", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    address_b = Address("1 RUE DE LA PAIX", "PARIS", "75002", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/2")
+    company_a = Company(
         name="ACME SARL", address=address_a, siret="12345678900012",
-        creation_date="01/01/2020", link="https://www.pappers.fr/entreprise/1", directors=[],
+        creation_date="01/01/2020", link="https://annuaire-entreprises.data.gouv.fr/entreprise/1", directors=[],
     )
-    company_b = PapperResultSociety(
+    company_b = Company(
         name="OTHER SARL", address=address_b, siret="98765432100099",
-        creation_date="01/01/2021", link="https://www.pappers.fr/entreprise/2", directors=[],
+        creation_date="01/01/2021", link="https://annuaire-entreprises.data.gouv.fr/entreprise/2", directors=[],
     )
 
     graph = GossipGraph()
-    graph.load_pappers([company_a, company_b])
+    graph.load_recherche_entreprises([company_a, company_b])
     data = graph.to_graph_data()
 
     address_nodes = [n for n in data["nodes"] if n["type"] == "Address"]
@@ -87,20 +87,20 @@ def test_addresses_merge_case_insensitively_on_street_city_and_postal_code():
 
 
 def test_persons_and_companies_merge_case_insensitively():
-    address = Address("1 Rue de la Paix", "Paris", "75002", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
-    person_a = Person("Jean", "Dupont", birth_date="1980-05", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
-    person_b = Person("JEAN", "DUPONT", birth_date="1980-05", source="Pappers", source_url="https://www.pappers.fr/entreprise/2")
-    company_a = PapperResultSociety(
+    address = Address("1 Rue de la Paix", "Paris", "75002", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    person_a = Person("Jean", "Dupont", birth_date="1980-05", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    person_b = Person("JEAN", "DUPONT", birth_date="1980-05", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/2")
+    company_a = Company(
         name="ACME SARL", address=address, siret="12345678900012", creation_date="01/01/2020",
-        link="https://www.pappers.fr/entreprise/1", directors=[Director(person_a, "Président", "01/01/2020")],
+        link="https://annuaire-entreprises.data.gouv.fr/entreprise/1", directors=[Director(person_a, "Président", "01/01/2020")],
     )
-    company_b = PapperResultSociety(
+    company_b = Company(
         name="acme sarl", address=address, siret="12345678900012", creation_date="01/01/2020",
-        link="https://www.pappers.fr/entreprise/2", directors=[Director(person_b, "Gérant", "01/01/2021")],
+        link="https://annuaire-entreprises.data.gouv.fr/entreprise/2", directors=[Director(person_b, "Gérant", "01/01/2021")],
     )
 
     graph = GossipGraph()
-    graph.load_pappers([company_a, company_b])
+    graph.load_recherche_entreprises([company_a, company_b])
     data = graph.to_graph_data()
 
     person_nodes = [n for n in data["nodes"] if n["type"] == "Person"]
@@ -113,17 +113,17 @@ def test_persons_and_companies_merge_case_insensitively():
 
 
 def test_probable_home_edge_created_for_entrepreneur_individuel():
-    address = Address("1 Rue de la Paix", "Paris", "75002", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
-    person = Person("Jean", "Dupont", birth_date="1980-05", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
+    address = Address("1 Rue de la Paix", "Paris", "75002", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    person = Person("Jean", "Dupont", birth_date="1980-05", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
     director = Director(person, "Exploitant", "01/01/2020")
-    company = PapperResultSociety(
+    company = Company(
         name="Jean Dupont EI", address=address, siret="12345678900012", creation_date="01/01/2020",
-        link="https://www.pappers.fr/entreprise/1", directors=[director],
+        link="https://annuaire-entreprises.data.gouv.fr/entreprise/1", directors=[director],
         legal_form="entrepreneur individuel",  # different casing than the match set, on purpose
     )
 
     graph = GossipGraph()
-    graph.load_pappers([company])
+    graph.load_recherche_entreprises([company])
     data = graph.to_graph_data()
 
     home_edges = [e for e in data["edges"] if e["type"] == "PROBABLE_HOME"]
@@ -135,18 +135,18 @@ def test_probable_home_edge_created_for_entrepreneur_individuel():
 
 
 def test_probable_home_edge_created_for_sci():
-    address = Address("1 Rue de la Paix", "Paris", "75002", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
-    person_a = Person("Jean", "Dupont", birth_date="1980-05", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
-    person_b = Person("Marie", "Martin", birth_date="1982-03", source="Pappers", source_url="https://www.pappers.fr/entreprise/1")
-    company = PapperResultSociety(
+    address = Address("1 Rue de la Paix", "Paris", "75002", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    person_a = Person("Jean", "Dupont", birth_date="1980-05", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    person_b = Person("Marie", "Martin", birth_date="1982-03", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    company = Company(
         name="SCI Les Tilleuls", address=address, siret="12345678900012", creation_date="01/01/2020",
-        link="https://www.pappers.fr/entreprise/1",
+        link="https://annuaire-entreprises.data.gouv.fr/entreprise/1",
         directors=[Director(person_a, "Gérant", "01/01/2020"), Director(person_b, "Gérante", "01/01/2020")],
         legal_form="SCI, Société Civile Immobilière",
     )
 
     graph = GossipGraph()
-    graph.load_pappers([company])
+    graph.load_recherche_entreprises([company])
     data = graph.to_graph_data()
 
     home_edges = [e for e in data["edges"] if e["type"] == "PROBABLE_HOME"]
@@ -156,12 +156,37 @@ def test_probable_home_edge_created_for_sci():
 def test_add_original_person_merges_matching_director_and_enriches_birth_date():
     graph = GossipGraph()
     graph.add_original_person("Jean", "Dupont")
-    graph.load_pappers(_sample_results())
+    graph.load_recherche_entreprises(_sample_results())
 
     data = graph.to_graph_data()
     person_nodes = [n for n in data["nodes"] if n["type"] == "Person"]
     assert len(person_nodes) == 1
     assert person_nodes[0]["key"] == {"first_name_key": "jean", "last_name_key": "dupont", "birth_date_key": None}
+    assert person_nodes[0]["properties"]["Birth date"] == "1980-05"
+
+    director_edges = [e for e in data["edges"] if e["type"] == "DIRECTOR_OF"]
+    assert len(director_edges) == 1
+    assert director_edges[0]["from"] == person_nodes[0]["id"]
+
+
+def test_add_original_person_merges_director_with_extra_given_names():
+    address = Address("1 Rue de la Paix", "Paris", "75002", source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    person = Person("Stanislas Karol", "Jacob", birth_date="1980-05",
+                     source="Recherche d'entreprises", source_url="https://annuaire-entreprises.data.gouv.fr/entreprise/1")
+    director = Director(person, "Président", "01/01/2020")
+    company = Company(
+        name="ACME SARL", address=address, siret="12345678900012", creation_date="01/01/2020",
+        link="https://annuaire-entreprises.data.gouv.fr/entreprise/1", directors=[director], legal_form="SARL",
+    )
+
+    graph = GossipGraph()
+    graph.add_original_person("Stanislas", "Jacob")
+    graph.load_recherche_entreprises([company])
+
+    data = graph.to_graph_data()
+    person_nodes = [n for n in data["nodes"] if n["type"] == "Person"]
+    assert len(person_nodes) == 1
+    assert person_nodes[0]["key"] == {"first_name_key": "stanislas", "last_name_key": "jacob", "birth_date_key": None}
     assert person_nodes[0]["properties"]["Birth date"] == "1980-05"
 
     director_edges = [e for e in data["edges"] if e["type"] == "DIRECTOR_OF"]
@@ -196,9 +221,9 @@ def test_original_person_and_email_link_regardless_of_call_order():
     assert len(email_edges) == 1
 
 
-def test_load_pappers_before_add_original_person_does_not_retroactively_merge():
+def test_load_recherche_entreprises_before_add_original_person_does_not_retroactively_merge():
     graph = GossipGraph()
-    graph.load_pappers(_sample_results())
+    graph.load_recherche_entreprises(_sample_results())
     graph.add_original_person("Jean", "Dupont")
 
     data = graph.to_graph_data()
@@ -264,7 +289,7 @@ def test_load_phoneinfoga_enriches_original_phone_node_in_place():
     graph = GossipGraph()
     graph.add_original_phone("+33612345678")
     result = PhoneNumber("+33612345678", country="France", carrier="Orange", source="Phoneinfoga")
-    graph.load_phoneinfoga("+33612345678", result)
+    graph.load_phoneinfoga("+33612345678", [result])
 
     data = graph.to_graph_data()
     phone_nodes = [n for n in data["nodes"] if n["type"] == "PhoneNumber"]
@@ -374,7 +399,7 @@ def test_load_maigret_creates_username_node_even_without_add_original_username()
 
 def test_render_html_embeds_valid_graph_data():
     graph = GossipGraph()
-    graph.load_pappers(_sample_results())
+    graph.load_recherche_entreprises(_sample_results())
     data = graph.to_graph_data()
 
     html = graph_html.render_html(data)

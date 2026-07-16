@@ -1,5 +1,4 @@
 import asyncio
-from typing import List
 
 import httpx
 from holehe.core import import_submodules, get_functions, launch_module
@@ -18,12 +17,12 @@ async def _check_email(email: str) -> list[dict]:
     return out
 
 
-def lookup(email: str) -> List[OnlineAccount]:
+def lookup(email: str) -> list[OnlineAccount]:
     """
     Runs every holehe checker module against `email` and returns one OnlineAccount
     per module that reported the email exists on that site. Modules that errored or
     hit a rate limit are silently dropped — per-module failure is normal for holehe,
-    unlike Pappers where a CAPTCHA blocks the whole page.
+    unlike Recherche d'entreprises where a single HTTP error blocks the whole search.
     """
     raw_results = asyncio.run(_check_email(email))
     return [

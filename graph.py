@@ -1,5 +1,4 @@
-from nodes import Person, Address, Director, Email, OnlineAccount, PhoneNumber, Username
-from pappers_scrapper import PapperResultSociety, PersonKey
+from nodes import Person, Address, Director, Email, OnlineAccount, PhoneNumber, Username, Company, PersonKey
 
 AddressKey = tuple[str, str, str]                # normalized (street, city, postal_code)
 AddressEdgeKey = tuple[str, AddressKey]          # (siret_key, addr_key)
@@ -39,14 +38,34 @@ def _norm(s: str | None) -> str | None:
     return s.strip().lower() if s is not None else None
 
 
+def _first_name_key(s: str | None) -> str | None:
+    """Normalizes a given-name field down to its first token, for matching the
+    original person's first name against Recherche d'entreprises' "prenoms" field,
+    which can include extra given names (e.g. "Stanislas Karol" for a search on
+    "Stanislas")."""
+    n = _norm(s)
+    return n.split()[0] if n else n
+
+
 class GossipGraph:
+    """
+    An in-memory graph of everything discovered about a target, built by repeated
+    calls to its add_*/load_* methods and exported via export_cypher()/export_html().
+
+    Not backed by networkx or any graph library — nodes and edges are plain dicts
+    keyed by a normalized identity key per type (e.g. PersonKey, EmailKey), so calling
+    a load_* method twice for the same identity merges into the same node instead of
+    creating a duplicate. Keys are normalized (see _norm()) for case-insensitive
+    matching, while the stored objects keep their original casing for display.
+    """
+
     def __init__(self) -> None:
-        self._companies: dict[str, PapperResultSociety] = {}
+        self._companies: dict[str, Company] = {}
         self._persons: dict[PersonKey, Person] = {}
         self._addresses: dict[AddressKey, Address] = {}
-        # Dicts instead of lists to deduplicate across multiple load_pappers() calls
-        self._address_edges: dict[AddressEdgeKey, tuple[PapperResultSociety, Address]] = {}
-        self._director_edges: dict[DirectorEdgeKey, tuple[Person, PapperResultSociety, Director]] = {}
+        # Dicts instead of lists to deduplicate across multiple load_recherche_entreprises() calls
+        self._address_edges: dict[AddressEdgeKey, tuple[Company, Address]] = {}
+        self._director_edges: dict[DirectorEdgeKey, tuple[Person, Company, Director]] = {}
         self._probable_home_edges: dict[ProbableHomeEdgeKey, tuple[Address, Person]] = {}
         self._emails: dict[EmailKey, Email] = {}
         self._online_accounts: dict[OnlineAccountKey, OnlineAccount] = {}
@@ -63,9 +82,9 @@ class GossipGraph:
         self._username_registered_on_edges: dict[UsernameAccountEdgeKey, tuple[Username, OnlineAccount]] = {}
 
         # Maps a normalized (first_name, last_name) to the PersonKey of the "original" Person
-        # node for a --first-name/--last-name entrypoint, so load_pappers can alias-match
-        # directors onto it by name alone instead of creating a second, birth-date-qualified
-        # Person node.
+        # node for a --first-name/--last-name entrypoint, so load_recherche_entreprises can
+        # alias-match directors onto it by name alone instead of creating a second,
+        # birth-date-qualified Person node.
         self._original_person_name_keys: dict[tuple[str, str], PersonKey] = {}
 
         # Track the original Person entrypoint and Email entrypoint(s) (if given), so that
@@ -102,9 +121,10 @@ class GossipGraph:
         """
         Registers the CLI entrypoint's own Person node, regardless of scraper results.
 
-        Must be called before load_pappers() for this name — load_pappers consults the
-        registered name key while building each director's key, so any director processed
-        before this call is keyed normally and will not be retroactively merged.
+        Must be called before load_recherche_entreprises() for this name —
+        load_recherche_entreprises consults the registered name key while building each
+        director's key, so any director processed before this call is keyed normally and
+        will not be retroactively merged.
         """
         fn_key, ln_key = _norm(first_name), _norm(last_name)
         person_key: PersonKey = (fn_key, ln_key, None)
@@ -112,7 +132,7 @@ class GossipGraph:
             self._persons[person_key] = Person(first_name, last_name, birth_date=birth_date, source="Provided by user")
         elif birth_date and not self._persons[person_key].birth_date:
             self._persons[person_key].birth_date = birth_date
-        self._original_person_name_keys[(fn_key, ln_key)] = person_key
+        self._original_person_name_keys[(_first_name_key(first_name), ln_key)] = person_key
         self._original_person_key = person_key
         self._link_original_person_and_email()
         self._link_original_person_and_phone()
@@ -174,17 +194,21 @@ class GossipGraph:
             self._usernames[username_key], self._emails[email_key],
         )
 
-    def load_phoneinfoga(self, phone: str, result: PhoneNumber) -> None:
-        """Enriches the phone entrypoint's node in place with Phoneinfoga's scan result."""
+    def load_phoneinfoga(self, phone: str, results: list[PhoneNumber]) -> None:
+        """Enriches the phone entrypoint's node in place with Phoneinfoga's scan result
+        (0 or 1 items — empty if the lookup failed)."""
         phone_key = _norm(phone)
-        if phone_key not in self._phones:
-            self._phones[phone_key] = result
-            return
-        existing = self._phones[phone_key]
-        existing.country = result.country
-        existing.carrier = result.carrier
+        for result in results:
+            if phone_key not in self._phones:
+                self._phones[phone_key] = result
+            else:
+                existing = self._phones[phone_key]
+                existing.country = result.country
+                existing.carrier = result.carrier
 
     def load_holehe(self, email: str, results: list[OnlineAccount]) -> None:
+        """Registers accounts Holehe found for `email`, creating the Email node if
+        add_original_email()/add_extrapolated_email() hasn't already registered it."""
         email_key = _norm(email)
         if email_key not in self._emails:
             self._emails[email_key] = Email(email)
@@ -198,9 +222,14 @@ class GossipGraph:
             )
 
     def load_sherlock(self, username: str, results: list[OnlineAccount]) -> None:
+        """Registers accounts Sherlock found for `username`. Sherlock and Maigret both
+        search by username and produce the same OnlineAccount shape, so they share
+        _load_username_accounts() and are only distinguished by each account's own
+        `source` field."""
         self._load_username_accounts(username, results)
 
     def load_maigret(self, username: str, results: list[OnlineAccount]) -> None:
+        """Registers accounts Maigret found for `username`. See load_sherlock()."""
         self._load_username_accounts(username, results)
 
     def _load_username_accounts(self, username: str, results: list[OnlineAccount]) -> None:
@@ -216,7 +245,22 @@ class GossipGraph:
                 self._usernames[username_key], self._online_accounts[acct_key],
             )
 
-    def load_pappers(self, results: list[PapperResultSociety]) -> None:
+    def load_recherche_entreprises(self, results: list[Company]) -> None:
+        """
+        Registers each Company (with its Address and Director edges). Directors are
+        matched by normalized (first name's first token, last_name) against any
+        "original person" registered via add_original_person() — the API's "prenoms"
+        field can carry extra given names (e.g. "Stanislas Karol" for a director found
+        by searching "Stanislas"), so only the first token is compared. A match
+        enriches that same Person node
+        in place with the director's birth date instead of creating a second Person,
+        so add_original_person() must be called first for this aliasing to happen (a
+        director processed beforehand is keyed independently and won't retroactively
+        merge). A DIRECTOR_OF edge is always added; a company whose legal form is a
+        sole-proprietorship/SCI (_PROBABLE_HOME_LEGAL_FORMS) also gets a PROBABLE_HOME
+        edge from its address to the director, since those forms typically use the
+        owner's home as the registered address.
+        """
         for company in results:
             siret_key = _norm(company.siret)
             self._companies[siret_key] = company
@@ -234,13 +278,13 @@ class GossipGraph:
 
             for director in company.directors:
                 p = director.person
-                name_key = (_norm(p.first_name), _norm(p.last_name))
+                name_key = (_first_name_key(p.first_name), _norm(p.last_name))
 
                 if name_key in self._original_person_name_keys:
                     person_key = self._original_person_name_keys[name_key]
                     original = self._persons[person_key]
                     # Enrich in place so edges already referencing this Person object
-                    # (from earlier load_pappers calls) see the birth date too.
+                    # (from earlier load_recherche_entreprises calls) see the birth date too.
                     if p.birth_date and not original.birth_date:
                         original.birth_date = p.birth_date
                 else:
@@ -515,7 +559,7 @@ class GossipGraph:
                     "link": company.link,
                     **({"legal_form": company.legal_form} if company.legal_form else {}),
                 },
-                "source": "Pappers",
+                "source": "Recherche d'entreprises",
                 "source_url": company.link,
             })
 

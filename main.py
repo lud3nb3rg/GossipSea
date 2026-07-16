@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from pappers_scrapper import lookup, CaptchaError
+from recherche_entreprises_scraper import lookup, RechercheEntreprisesError
 import extrapolation
 import holehe_scraper
 import maigret_scraper
@@ -48,14 +48,14 @@ def main() -> None:
     if args.first_name and args.last_name:
         ran_any = True
         graph.add_original_person(args.first_name, args.last_name, birth_date=args.dob)
-        print(f"Searching Pappers for {args.first_name} {args.last_name}...")
+        print(f"Searching Recherche d'entreprises for {args.first_name} {args.last_name}...")
         try:
             results = lookup(args.first_name, args.last_name)
-        except CaptchaError as e:
+        except RechercheEntreprisesError as e:
             print(f"Error: {e}", file=sys.stderr)
             results = []
         print(f"Found {len(results)} company/companies.")
-        graph.load_pappers(results)
+        graph.load_recherche_entreprises(results)
     elif args.dob:
         print("Warning: --dob requires --first-name and --last-name, skipping.", file=sys.stderr)
 
@@ -74,10 +74,11 @@ def main() -> None:
         graph.add_original_phone(args.phone)
         print(f"Searching Phoneinfoga for {args.phone}...")
         try:
-            result = phoneinfoga_scraper.lookup(args.phone)
-            graph.load_phoneinfoga(args.phone, result)
+            results = phoneinfoga_scraper.lookup(args.phone)
         except phoneinfoga_scraper.PhoneinfogaError as e:
             print(f"Error: {e}", file=sys.stderr)
+            results = []
+        graph.load_phoneinfoga(args.phone, results)
 
     provided_usernames = _collect_values(args.username, args.username_file)
     extrapolated_usernames = (
